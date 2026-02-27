@@ -6,6 +6,7 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
 import android.util.DisplayMetrics
+import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import android.view.KeyEvent
 import android.view.WindowManager
@@ -13,6 +14,7 @@ import android.view.accessibility.AccessibilityEvent
 import kotlin.math.roundToInt
 
 class AutoClickAccessibilityService : AccessibilityService() {
+    private val logTag = "TapMacroA11yService"
     private var disconnectionHandled = false
     @Volatile
     private var lastObservedPackageName: String? = null
@@ -24,6 +26,7 @@ class AutoClickAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         disconnectionHandled = false
+        Log.i(logTag, "onServiceConnected")
         RunEngineManager.getInstance().onAccessibilityServiceConnected()
         RecorderManager.getInstance().onAccessibilityServiceConnected()
     }
@@ -48,6 +51,7 @@ class AutoClickAccessibilityService : AccessibilityService() {
             return super.onKeyEvent(event)
         }
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            Log.i(logTag, "volume_key_stop triggered keyCode=${event.keyCode}")
             RunEngineManager.getInstance().stop()
             RecorderManager.getInstance().clear()
             OverlayController.getInstance(applicationContext).stop()
@@ -223,6 +227,7 @@ class AutoClickAccessibilityService : AccessibilityService() {
         if (instance === this) {
             instance = null
         }
+        Log.w(logTag, "serviceDisconnected reason=${stopReason.value}")
         RunEngineManager.getInstance().onAccessibilityServiceDisconnected(stopReason)
         RecorderManager.getInstance().onAccessibilityServiceDisconnected()
     }

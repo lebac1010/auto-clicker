@@ -116,12 +116,28 @@ class _AdvancedHomeScreenState extends State<AdvancedHomeScreen>
     if (runOptions == null) {
       return;
     }
-    await FloatingControllerService.start();
     final started = await RunExecutionService.instance.runWithOptions(
       script,
       runOptions,
     );
     if (started) {
+      final overlayStarted = await FloatingControllerService.start();
+      if (!overlayStarted) {
+        await RunEngineService.stop();
+        await _refresh();
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Không thể mở Floating Controller, run đã được dừng.',
+            ),
+          ),
+        );
+        return;
+      }
+      await FloatingControllerService.updateRunMarkers(script);
       await _repository.markRun(id);
       AnalyticsService.logEvent(
         'script_run_started',

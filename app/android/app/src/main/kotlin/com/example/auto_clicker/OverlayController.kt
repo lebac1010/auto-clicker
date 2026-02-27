@@ -7,6 +7,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.provider.Settings
 import android.util.DisplayMetrics
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -21,6 +22,8 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class OverlayController private constructor(private val context: Context) {
+    private val logTag = "TapMacroOverlay"
+    private val stopDebounceMs = 700L
     private val windowManager =
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
@@ -33,6 +36,7 @@ class OverlayController private constructor(private val context: Context) {
     private var markerEditorItems: MutableList<MarkerEditorItem> = mutableListOf()
     private var panelVisible = false
     private var markersVisible = true
+    private var lastStartResumeTapAtMs = 0L
     private var onStartRun: (() -> Unit)? = null
     private var onPauseRun: (() -> Unit)? = null
     private var onStopRun: (() -> Unit)? = null
@@ -54,19 +58,27 @@ class OverlayController private constructor(private val context: Context) {
 
     fun start(): Boolean {
         if (isRunning()) {
+            Log.i(logTag, "start skipped: overlay already running")
             return true
         }
         if (!Settings.canDrawOverlays(context)) {
+            Log.w(logTag, "start failed: overlay permission missing")
             return false
         }
 
+        Log.i(logTag, "start overlay requested")
         createBubble()
         createEmergencyStop()
         createPanel()
+        Log.i(logTag, "start overlay completed")
         return true
     }
 
     fun stop() {
+        Log.i(
+            logTag,
+            "stop overlay requested markers=${markerViews.size} panelVisible=$panelVisible markersVisible=$markersVisible"
+        )
         removeView(bubbleView)
         removeView(emergencyStopView)
         removeView(panelView)
@@ -79,6 +91,7 @@ class OverlayController private constructor(private val context: Context) {
         markerViews = mutableListOf()
         panelVisible = false
         markersVisible = true
+        Log.i(logTag, "stop overlay completed")
     }
 
     fun isRunning(): Boolean {
@@ -87,8 +100,11 @@ class OverlayController private constructor(private val context: Context) {
 
     fun updateRunMarkersFromScript(payload: Map<*, *>) {
         if (!isRunning()) {
+            Log.w(logTag, "updateRunMarkers ignored: overlay not running")
             return
         }
+        markerViews.forEach { removeView(it) }
+        markerViews = mutableListOf()
         val rawSteps = payload["steps"] as? List<*> ?: return
         val points = rawSteps.mapNotNull { raw ->
             val step = raw as? Map<*, *> ?: return@mapNotNull null
@@ -104,19 +120,27 @@ class OverlayController private constructor(private val context: Context) {
             )
         }
         if (points.isEmpty()) {
+            Log.i(
+                logTag,
+                "updateRunMarkers scriptId=${payload["id"] ?: "unknown"} no enabled points"
+            )
             return
         }
-        markerViews.forEach { removeView(it) }
-        markerViews = mutableListOf()
+        Log.i(
+            logTag,
+            "updateRunMarkers scriptId=${payload["id"] ?: "unknown"} points=${points.size}"
+        )
         createRunMarkers(points)
     }
 
     fun startPointPicker(): Boolean {
         if (!Settings.canDrawOverlays(context)) {
             emitError("OVERLAY_PERMISSION_REQUIRED", "Overlay permission is required.")
+            Log.w(logTag, "startPointPicker failed: overlay permission missing")
             return false
         }
         if (pointPickerView != null) {
+            Log.i(logTag, "startPointPicker skipped: already active")
             return true
         }
 
@@ -249,12 +273,14 @@ class OverlayController private constructor(private val context: Context) {
 
         windowManager.addView(root, params)
         pointPickerView = root
+        Log.i(logTag, "startPointPicker opened")
         return true
     }
 
     fun startMarkerEditor(rawPoints: List<Map<*, *>>): Boolean {
         if (!Settings.canDrawOverlays(context)) {
             emitError("OVERLAY_PERMISSION_REQUIRED", "Overlay permission is required.")
+            Log.w(logTag, "startMarkerEditor failed: overlay permission missing")
             return false
         }
         val points = rawPoints.mapNotNull { raw ->
@@ -265,12 +291,14 @@ class OverlayController private constructor(private val context: Context) {
         }
         if (points.isEmpty()) {
             emitError("MARKER_EDITOR_EMPTY", "No points available to edit.")
+            Log.w(logTag, "startMarkerEditor failed: points empty")
             return false
         }
 
         stopMarkerEditorInternal()
         createMarkerEditorMarkers(points)
         createMarkerEditorControls()
+        Log.i(logTag, "startMarkerEditor opened points=${points.size}")
         return true
     }
 
@@ -278,6 +306,7 @@ class OverlayController private constructor(private val context: Context) {
         if (markerEditorControlView == null && markerEditorItems.isEmpty()) {
             return false
         }
+        Log.i(logTag, "stopMarkerEditor requested points=${markerEditorItems.size}")
         stopMarkerEditorInternal()
         return true
     }
@@ -342,6 +371,7 @@ class OverlayController private constructor(private val context: Context) {
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!dragged) {
+                        Log.i(logTag, "bubble tapped -> toggle panel")
                         togglePanel()
                     }
                     true
@@ -415,11 +445,19 @@ class OverlayController private constructor(private val context: Context) {
         }
 
         val startButton = createActionButton(
-            label = "Resume",
+            label = "Start / Resume",
             backgroundColor = "#0F766E",
             textColor = Color.WHITE,
         ).apply {
-            setOnClickListener { onStartRun?.invoke() }
+            setOnClickListener {
+                Log.i(logTag, "panel_action=start_resume clicked")
+                lastStartResumeTapAtMs = System.currentTimeMillis()
+                onStartRun?.invoke()
+                if (panelVisible) {
+                    Log.i(logTag, "panel auto-hide after start_resume")
+                    togglePanel()
+                }
+            }
         }
         val pauseButton = createActionButton(
             label = "Pause",
@@ -427,7 +465,10 @@ class OverlayController private constructor(private val context: Context) {
             textColor = Color.WHITE,
         ).apply {
             text = "Pause"
-            setOnClickListener { onPauseRun?.invoke() }
+            setOnClickListener {
+                Log.i(logTag, "panel_action=pause clicked")
+                onPauseRun?.invoke()
+            }
         }
         val stopButton = createActionButton(
             label = "Stop",
@@ -435,6 +476,11 @@ class OverlayController private constructor(private val context: Context) {
             textColor = Color.WHITE,
         ).apply {
             setOnClickListener {
+                if (isStopDebounced()) {
+                    Log.w(logTag, "panel_action=stop ignored by debounce")
+                    return@setOnClickListener
+                }
+                Log.i(logTag, "panel_action=stop clicked")
                 onStopRun?.invoke()
                 stop()
             }
@@ -447,6 +493,7 @@ class OverlayController private constructor(private val context: Context) {
         ).apply {
             setOnClickListener {
                 toggleMarkers()
+                Log.i(logTag, "panel_action=toggle_markers visible=$markersVisible")
                 text = markerButtonLabel()
             }
         }
@@ -490,6 +537,11 @@ class OverlayController private constructor(private val context: Context) {
             }
             elevation = 6f
             setOnClickListener {
+                if (isStopDebounced()) {
+                    Log.w(logTag, "emergency_stop ignored by debounce")
+                    return@setOnClickListener
+                }
+                Log.i(logTag, "emergency_stop clicked")
                 onStopRun?.invoke()
                 this@OverlayController.stop()
             }
@@ -563,6 +615,7 @@ class OverlayController private constructor(private val context: Context) {
             }
 
             windowManager.addView(marker, params)
+            marker.visibility = if (markersVisible) View.VISIBLE else View.GONE
             markers.add(marker)
         }
         markerViews = markers
@@ -701,6 +754,7 @@ class OverlayController private constructor(private val context: Context) {
         val panel = panelView ?: return
         panelVisible = !panelVisible
         panel.visibility = if (panelVisible) View.VISIBLE else View.GONE
+        Log.i(logTag, "panel_visible=$panelVisible")
     }
 
     private fun markerButtonLabel(): String {
@@ -712,9 +766,16 @@ class OverlayController private constructor(private val context: Context) {
         markerViews.forEach { marker ->
             marker.visibility = if (markersVisible) View.VISIBLE else View.GONE
         }
+        Log.i(logTag, "markers_visible=$markersVisible count=${markerViews.size}")
+    }
+
+    private fun isStopDebounced(): Boolean {
+        val elapsed = System.currentTimeMillis() - lastStartResumeTapAtMs
+        return elapsed in 0 until stopDebounceMs
     }
 
     private fun stopPointPickerInternal() {
+        Log.i(logTag, "stopPointPicker requested")
         removeView(pointPickerView)
         pointPickerView = null
     }

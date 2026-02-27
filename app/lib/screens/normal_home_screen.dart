@@ -30,6 +30,8 @@ class NormalHomeScreen extends StatefulWidget {
 
 class _NormalHomeScreenState extends State<NormalHomeScreen>
     with WidgetsBindingObserver {
+  static const int _minSafeStartDelaySec = 2;
+
   final ScriptRepository _repository = ScriptRepository.instance;
   PermissionState _permissionState = PermissionState.fallback;
   NormalQuickConfig _config = NormalQuickConfig.defaults;
@@ -275,10 +277,18 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
     if (!await _ensureRunPermissions()) {
       return;
     }
+    final safeStartDelaySec = _config.startDelaySec < _minSafeStartDelaySec
+        ? _minSafeStartDelaySec
+        : _config.startDelaySec;
+    if (safeStartDelaySec != _config.startDelaySec) {
+      _showMessage(
+        'Đang áp dụng start delay an toàn ${_minSafeStartDelaySec}s để tránh tự chạm nút điều khiển.',
+      );
+    }
     final script = _buildSingleTargetScript();
     final started = await RunExecutionService.instance.runWithOptions(
       script,
-      RunOptions(startDelaySec: _config.startDelaySec),
+      RunOptions(startDelaySec: safeStartDelaySec),
     );
     if (started) {
       final overlayStarted = await FloatingControllerService.start();
@@ -299,7 +309,7 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
           'steps_count': script.steps.length,
           'loop_mode': script.loopCount > 0 ? 'count' : 'infinite',
           'source': 'normal',
-          'start_delay_sec': _config.startDelaySec,
+          'start_delay_sec': safeStartDelaySec,
           'stop_rule': 'none',
           'performance_mode': 'balanced',
           'screen_name': 'normal_home',
@@ -351,6 +361,14 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
     if (!await _ensureRunPermissions()) {
       return;
     }
+    final safeStartDelaySec = _config.startDelaySec < _minSafeStartDelaySec
+        ? _minSafeStartDelaySec
+        : _config.startDelaySec;
+    if (safeStartDelaySec != _config.startDelaySec) {
+      _showMessage(
+        'Đang áp dụng start delay an toàn ${_minSafeStartDelaySec}s để tránh tự chạm nút điều khiển.',
+      );
+    }
     final script = await _repository.getScript(id);
     if (script == null) {
       _showMessage('Selected script not found.');
@@ -364,7 +382,7 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
     }
     final started = await RunExecutionService.instance.runWithOptions(
       script,
-      const RunOptions(),
+      RunOptions(startDelaySec: safeStartDelaySec),
     );
     if (started) {
       final overlayStarted = await FloatingControllerService.start();
@@ -386,7 +404,7 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
           'steps_count': script.steps.length,
           'loop_mode': script.loopCount > 0 ? 'count' : 'infinite',
           'source': 'normal',
-          'start_delay_sec': 0,
+          'start_delay_sec': safeStartDelaySec,
           'stop_rule': 'none',
           'performance_mode': 'balanced',
           'screen_name': 'normal_home',

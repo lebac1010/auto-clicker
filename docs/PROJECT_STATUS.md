@@ -353,6 +353,25 @@ Gate can chay de khoa trang thai:
 25. Overlay marker/run callback fix:
    - Bo marker mac dinh `1/2/3` khi bat controller de tranh gay nham cho single target.
    - Them channel `updateRunMarkers` de dong bo marker dung theo script dang run.
+26. Overlay control logic fix (Normal/Advanced):
+   - `AC` nut Start doi callback native sang `startOrResume()` (khong con chi `resume`).
+   - Dong bo callback tu Scheduler (`ensureOverlayCallbacks`) sang `startOrResume()`.
+   - `OverlayController.updateRunMarkersFromScript` se clear marker cu truoc khi render marker moi.
+   - Nut panel doi nhan thanh `Start / Resume` de giam nham lan.
+   - Advanced mode run flow duoc dong bo voi Normal:
+     - chi mo overlay sau khi run start thanh cong
+     - neu mo overlay that bai thi stop run ngay
+     - cap nhat marker theo script dang run.
+27. Diagnostic logging pass (one-time deep trace):
+   - Them log chi tiet cho overlay actions (`start/resume/pause/stop`), method channel calls, marker sync va panel visibility.
+   - Them log cho run engine state transition, preflight block, auto-stop context (loop complete, dispatch fail, service down).
+   - Them log nguon stop do volume key trong accessibility service.
+   - Them log scheduler trigger path (`overlayStarted`, `runStarted`) de truy vet stop bat thuong.
+28. Anti self-stop hardening (Normal + Overlay):
+   - Panel tu dong an sau khi bam `Start / Resume` de giam nguy co auto-tap vao nut dieu khien.
+   - Debounce 700ms cho `Stop` va `Emergency Stop` ngay sau `Start / Resume`.
+   - Normal mode ap dung `startDelaySec` toi thieu 2s khi run (single/multi) de tranh tap vao UI noi bo.
+   - Analytics `start_delay_sec` tren Normal duoc ghi theo gia tri delay thuc te da ap dung.
 
 ---
 

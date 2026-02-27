@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.app.ActivityCompat
@@ -19,6 +20,7 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private val logTag = "TapMacroMainActivity"
     private val permissionChannelName = "com.auto_clicker/permissions"
     private val controllerChannelName = "com.auto_clicker/controller"
     private val settingsChannelName = "com.auto_clicker/settings"
@@ -35,9 +37,24 @@ class MainActivity : FlutterActivity() {
         val recorderManager = RecorderManager.getInstance()
 
         overlayController.setRunCallbacks(
-            onStart = { runEngineManager.resume() },
-            onPause = { runEngineManager.pause() },
-            onStop = { runEngineManager.stop() }
+            onStart = {
+                val before = runEngineManager.getState()
+                val success = runEngineManager.startOrResume()
+                val after = runEngineManager.getState()
+                Log.i(logTag, "overlay_action=start_resume success=$success state=$before->$after")
+            },
+            onPause = {
+                val before = runEngineManager.getState()
+                val success = runEngineManager.pause()
+                val after = runEngineManager.getState()
+                Log.i(logTag, "overlay_action=pause success=$success state=$before->$after")
+            },
+            onStop = {
+                val before = runEngineManager.getState()
+                val success = runEngineManager.stop()
+                val after = runEngineManager.getState()
+                Log.i(logTag, "overlay_action=stop success=$success state=$before->$after")
+            }
         )
         ExecutionStateSyncBridge.install(applicationContext)
 
@@ -72,29 +89,49 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, controllerChannelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "startFloatingController" -> result.success(overlayController.start())
+                    "startFloatingController" -> {
+                        val started = overlayController.start()
+                        Log.i(logTag, "method=startFloatingController success=$started")
+                        result.success(started)
+                    }
                     "stopFloatingController" -> {
+                        Log.i(logTag, "method=stopFloatingController requested")
                         runEngineManager.stop()
                         overlayController.stop()
                         result.success(true)
                     }
-                    "isFloatingControllerRunning" -> result.success(overlayController.isRunning())
+                    "isFloatingControllerRunning" -> {
+                        val running = overlayController.isRunning()
+                        Log.i(logTag, "method=isFloatingControllerRunning value=$running")
+                        result.success(running)
+                    }
                     "updateRunMarkers" -> {
                         val payload = call.argument<Map<*, *>>("script")
                         if (payload == null) {
+                            Log.w(logTag, "method=updateRunMarkers failed: payload=null")
                             result.success(false)
                         } else {
                             overlayController.updateRunMarkersFromScript(payload)
+                            Log.i(
+                                logTag,
+                                "method=updateRunMarkers success scriptId=${payload["id"] ?: "unknown"}"
+                            )
                             result.success(true)
                         }
                     }
                     "runScript" -> {
                         val payload = call.argument<Map<*, *>>("script")
                         if (payload == null) {
+                            Log.w(logTag, "method=runScript failed: payload=null")
                             result.success(false)
                         } else {
                             overlayController.updateRunMarkersFromScript(payload)
-                            result.success(runEngineManager.runScript(payload))
+                            val started = runEngineManager.runScript(payload)
+                            Log.i(
+                                logTag,
+                                "method=runScript scriptId=${payload["id"] ?: "unknown"} started=$started"
+                            )
+                            result.success(started)
                         }
                     }
                     "validateRunConditions" -> {
@@ -111,9 +148,21 @@ class MainActivity : FlutterActivity() {
                             result.success(runEngineManager.validateRunConditions(payload))
                         }
                     }
-                    "pauseScript" -> result.success(runEngineManager.pause())
-                    "resumeScript" -> result.success(runEngineManager.resume())
-                    "stopScript" -> result.success(runEngineManager.stop())
+                    "pauseScript" -> {
+                        val success = runEngineManager.pause()
+                        Log.i(logTag, "method=pauseScript success=$success")
+                        result.success(success)
+                    }
+                    "resumeScript" -> {
+                        val success = runEngineManager.resume()
+                        Log.i(logTag, "method=resumeScript success=$success")
+                        result.success(success)
+                    }
+                    "stopScript" -> {
+                        val success = runEngineManager.stop()
+                        Log.i(logTag, "method=stopScript success=$success")
+                        result.success(success)
+                    }
                     "getRunState" -> result.success(runEngineManager.getState())
                     "startRecorder" -> {
                         val countdownSec = call.argument<Int>("countdownSec") ?: 3

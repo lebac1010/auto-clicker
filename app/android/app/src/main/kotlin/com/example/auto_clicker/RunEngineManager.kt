@@ -7,10 +7,12 @@ import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.util.Log
 import io.flutter.plugin.common.EventChannel
 import java.util.Calendar
 
 class RunEngineManager private constructor() {
+    private val logTag = "TapMacroRunEngine"
     private val handler = Handler(Looper.getMainLooper())
     private var eventSink: EventChannel.EventSink? = null
     private var stateListener: ((String) -> Unit)? = null
@@ -18,6 +20,7 @@ class RunEngineManager private constructor() {
     @Volatile
     private var runState: RunState = RunState.IDLE
     private var script: ScriptPayload? = null
+    private var lastScript: ScriptPayload? = null
     private var activeSteps: List<StepPayload> = emptyList()
     private var stepIndex = 0
     private var completedLoops = 0
@@ -41,6 +44,10 @@ class RunEngineManager private constructor() {
                 stepIndex = 0
                 completedLoops += 1
                 if (currentScript.loopCount > 0 && completedLoops >= currentScript.loopCount) {
+                    Log.i(
+                        logTag,
+                        "auto_stop reason=loop_completed scriptId=${currentScript.id} completedLoops=$completedLoops"
+                    )
                     stop(StopReason.USER)
                     return
                 }
@@ -49,17 +56,26 @@ class RunEngineManager private constructor() {
             val step = currentSteps[stepIndex]
             val service = AutoClickAccessibilityService.instance
             if (service == null) {
+                Log.w(logTag, "auto_stop reason=service_null scriptId=${currentScript.id}")
                 stopDueToServiceDown(StopReason.SERVICE_KILLED)
                 return
             }
             val conditionFailure = evaluateConditionFailure(service, currentScript)
             if (conditionFailure != null) {
+                Log.w(
+                    logTag,
+                    "auto_stop reason=condition_unmet scriptId=${currentScript.id} code=${conditionFailure.code}"
+                )
                 emitError(conditionFailure.code, conditionFailure.message)
                 stop(StopReason.CONDITION_UNMET)
                 return
             }
             val dispatched = dispatchStep(service, step)
             if (!dispatched) {
+                Log.e(
+                    logTag,
+                    "auto_stop reason=dispatch_failed scriptId=${currentScript.id} stepIndex=$stepIndex action=${step.action}"
+                )
                 emitError("DISPATCH_FAILED", "Unable to dispatch gesture.")
                 stop(StopReason.ERROR)
                 return
@@ -96,15 +112,52 @@ class RunEngineManager private constructor() {
 
     fun runScript(payloadMap: Map<*, *>): Boolean {
         val payload = ScriptPayload.fromMap(payloadMap) ?: return false
+        Log.i(
+            logTag,
+            "runScript requested scriptId=${payload.id} steps=${payload.steps.size} loopCount=${payload.loopCount}"
+        )
+        return runScriptPayload(payload, rememberAsLast = true)
+    }
+
+    fun startOrResume(): Boolean {
+        Log.i(logTag, "startOrResume requested state=${runState.value}")
+        return when (runState) {
+            RunState.RUNNING -> true
+            RunState.PAUSED -> resume()
+            RunState.IDLE -> {
+                val payload = lastScript
+                if (payload == null) {
+                    emitError("NO_LAST_SCRIPT", "No previous script available to start.")
+                    Log.w(logTag, "startOrResume failed: no last script")
+                    return false
+                }
+                Log.i(logTag, "startOrResume using lastScriptId=${payload.id}")
+                runScriptPayload(payload, rememberAsLast = false)
+            }
+        }
+    }
+
+    private fun runScriptPayload(
+        payload: ScriptPayload,
+        rememberAsLast: Boolean
+    ): Boolean {
         val failure = evaluatePreflightFailure(payload)
         if (failure != null) {
             emitError(failure.code, failure.message)
+            Log.w(
+                logTag,
+                "runScript blocked scriptId=${payload.id} code=${failure.code} message=${failure.message}"
+            )
             return false
         }
         val enabledSteps = payload.steps.filter { it.enabled }
         if (enabledSteps.isEmpty()) {
             emitError("SCRIPT_INVALID", "Script has no enabled steps.")
+            Log.w(logTag, "runScript blocked scriptId=${payload.id}: no enabled steps")
             return false
+        }
+        if (rememberAsLast) {
+            lastScript = payload
         }
         script = payload
         activeSteps = enabledSteps
@@ -116,6 +169,10 @@ class RunEngineManager private constructor() {
         emitState()
         handler.removeCallbacks(runner)
         handler.post(runner)
+        Log.i(
+            logTag,
+            "runScript started scriptId=${payload.id} enabledSteps=${enabledSteps.size} loopCount=${payload.loopCount}"
+        )
         return true
     }
 
@@ -139,27 +196,32 @@ class RunEngineManager private constructor() {
 
     fun pause(): Boolean {
         if (runState != RunState.RUNNING) {
+            Log.w(logTag, "pause ignored state=${runState.value}")
             return false
         }
         runState = RunState.PAUSED
         handler.removeCallbacks(runner)
         emitState()
+        Log.i(logTag, "pause success scriptId=${script?.id ?: "unknown"}")
         return true
     }
 
     fun resume(): Boolean {
         if (runState != RunState.PAUSED) {
+            Log.w(logTag, "resume ignored state=${runState.value}")
             return false
         }
         runState = RunState.RUNNING
         cachedConditionSnapshot = null
         emitState()
         handler.post(runner)
+        Log.i(logTag, "resume success scriptId=${script?.id ?: "unknown"}")
         return true
     }
 
     fun stop(reason: StopReason = StopReason.USER): Boolean {
         if (runState == RunState.IDLE) {
+            Log.w(logTag, "stop ignored state=idle reason=${reason.value}")
             return false
         }
         val currentScriptId = script?.id
@@ -180,6 +242,10 @@ class RunEngineManager private constructor() {
         completedLoops = 0
         startedAtMs = 0L
         cachedConditionSnapshot = null
+        Log.i(
+            logTag,
+            "stop success reason=${reason.value} scriptId=${currentScriptId ?: "unknown"} elapsedMs=$elapsed"
+        )
         return true
     }
 
@@ -402,6 +468,7 @@ class RunEngineManager private constructor() {
         } else {
             "SERVICE_DOWN"
         }
+        Log.w(logTag, "stopDueToServiceDown reason=${reason.value} code=$code")
         emitError(code, "Accessibility service stopped.")
         stop(reason)
     }
