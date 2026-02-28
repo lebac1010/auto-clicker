@@ -20,6 +20,7 @@ class RunExecutionService {
   Timer? _durationStopTimer;
   String? _lastFailureMessage;
   String? _lastFailureCode;
+  int _startRequestToken = 0;
 
   String? get lastFailureMessage => _lastFailureMessage;
   String? get lastFailureCode => _lastFailureCode;
@@ -41,36 +42,73 @@ class RunExecutionService {
       throw FormatException(validationErrors.first);
     }
 
-    _ensureRunListener();
-    _cancelDurationTimer();
+    final requestToken = ++_startRequestToken;
 
-    if (options.startDelaySec > 0) {
-      await Future<void>.delayed(Duration(seconds: options.startDelaySec));
-    }
+    try {
+      final currentRunState = await _runEngineGateway.getRunState();
+      if (_isStartRequestSuperseded(requestToken)) {
+        return _markStartRequestSuperseded();
+      }
+      if (_isRunStateActive(currentRunState)) {
+        _lastFailureCode = 'RUN_ALREADY_ACTIVE';
+        _lastFailureMessage = 'A run is already active.';
+        return false;
+      }
 
-    final preparedScript = _applyOptions(script, options);
-    final preflight = await _runEngineGateway.validateRunConditions(
-      preparedScript,
-    );
-    if (!preflight.ok) {
-      _lastFailureCode = preflight.code;
-      _lastFailureMessage = preflight.message ?? 'Run conditions are not met.';
-      return false;
-    }
-    final started = await _runEngineGateway.runScript(preparedScript);
-    if (!started) {
-      _lastFailureCode ??= 'RUN_START_FAILED';
-      _lastFailureMessage ??= 'Unable to start run engine.';
-      return false;
-    }
+      _ensureRunListener();
+      _cancelDurationTimer();
 
-    if (options.stopRule == RunStopRule.duration) {
-      final durationSec = options.stopAfterDurationSec!;
-      _durationStopTimer = Timer(Duration(seconds: durationSec), () {
-        unawaited(_runEngineGateway.stop());
-      });
+      if (options.startDelaySec > 0) {
+        await Future<void>.delayed(Duration(seconds: options.startDelaySec));
+        if (_isStartRequestSuperseded(requestToken)) {
+          return _markStartRequestSuperseded();
+        }
+        final delayedRunState = await _runEngineGateway.getRunState();
+        if (_isStartRequestSuperseded(requestToken)) {
+          return _markStartRequestSuperseded();
+        }
+        if (_isRunStateActive(delayedRunState)) {
+          _lastFailureCode = 'RUN_ALREADY_ACTIVE';
+          _lastFailureMessage = 'A run became active before this start request.';
+          return false;
+        }
+      }
+
+      final preparedScript = _applyOptions(script, options);
+      final preflight = await _runEngineGateway.validateRunConditions(
+        preparedScript,
+      );
+      if (_isStartRequestSuperseded(requestToken)) {
+        return _markStartRequestSuperseded();
+      }
+      if (!preflight.ok) {
+        _lastFailureCode = preflight.code;
+        _lastFailureMessage = preflight.message ?? 'Run conditions are not met.';
+        return false;
+      }
+      final started = await _runEngineGateway.runScript(preparedScript);
+      if (_isStartRequestSuperseded(requestToken)) {
+        if (started) {
+          unawaited(_runEngineGateway.stop());
+        }
+        return _markStartRequestSuperseded();
+      }
+      if (!started) {
+        _lastFailureCode ??= 'RUN_START_FAILED';
+        _lastFailureMessage ??= 'Unable to start run engine.';
+        return false;
+      }
+
+      if (options.stopRule == RunStopRule.duration) {
+        final durationSec = options.stopAfterDurationSec!;
+        _durationStopTimer = Timer(Duration(seconds: durationSec), () {
+          unawaited(_runEngineGateway.stop());
+        });
+      }
+      return true;
+    } finally {
+      // No-op: request superseding is tracked by token only.
     }
-    return true;
   }
 
   ScriptModel _applyOptions(ScriptModel source, RunOptions options) {
@@ -91,6 +129,10 @@ class RunExecutionService {
   }
 
   ScriptStep _scaledStepForFastMode(ScriptStep step) {
+    if (step.intervalMs <= 0) {
+      // Keep non-positive override so native layer can fall back to default interval.
+      return step;
+    }
     return step.copyWith(
       intervalMs: _scaledInterval(step.intervalMs),
     );
@@ -99,6 +141,21 @@ class RunExecutionService {
   int _scaledInterval(int intervalMs) {
     final scaled = (intervalMs * _fastModeIntervalScale).round();
     return scaled < _minIntervalMs ? _minIntervalMs : scaled;
+  }
+
+  bool _isRunStateActive(String state) {
+    return state == 'running' || state == 'paused';
+  }
+
+  bool _isStartRequestSuperseded(int requestToken) {
+    return requestToken != _startRequestToken;
+  }
+
+  bool _markStartRequestSuperseded() {
+    _lastFailureCode = 'RUN_START_SUPERSEDED';
+    _lastFailureMessage =
+        'Start request was replaced by a newer start request.';
+    return false;
   }
 
   void _ensureRunListener() {

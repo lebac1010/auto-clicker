@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.DisplayMetrics
 import android.util.Log
@@ -34,22 +35,47 @@ class OverlayController private constructor(private val context: Context) {
     private var pointPickerView: View? = null
     private var markerEditorControlView: View? = null
     private var markerEditorItems: MutableList<MarkerEditorItem> = mutableListOf()
+    private var startRunButton: Button? = null
     private var panelVisible = false
     private var markersVisible = true
-    private var lastStartResumeTapAtMs = 0L
+    private var currentRunState = "idle"
+    private var stopBlockedUntilElapsedMs = 0L
+    private var callbacksOwner = "unset"
     private var onStartRun: (() -> Unit)? = null
     private var onPauseRun: (() -> Unit)? = null
     private var onStopRun: (() -> Unit)? = null
     private var eventSink: EventChannel.EventSink? = null
 
     fun setRunCallbacks(
+        owner: String,
         onStart: (() -> Unit)?,
         onPause: (() -> Unit)?,
         onStop: (() -> Unit)?
     ) {
+        callbacksOwner = owner
         onStartRun = onStart
         onPauseRun = onPause
         onStopRun = onStop
+        Log.i(logTag, "setRunCallbacks owner=$owner")
+    }
+
+    fun setRunCallbacksIfAbsent(
+        owner: String,
+        onStart: (() -> Unit)?,
+        onPause: (() -> Unit)?,
+        onStop: (() -> Unit)?
+    ) {
+        val alreadyConfigured = onStartRun != null || onPauseRun != null || onStopRun != null
+        if (alreadyConfigured) {
+            Log.i(logTag, "setRunCallbacksIfAbsent skipped owner=$owner existingOwner=$callbacksOwner")
+            return
+        }
+        setRunCallbacks(
+            owner = owner,
+            onStart = onStart,
+            onPause = onPause,
+            onStop = onStop
+        )
     }
 
     fun setEventSink(sink: EventChannel.EventSink?) {
@@ -89,6 +115,7 @@ class OverlayController private constructor(private val context: Context) {
         emergencyStopView = null
         panelView = null
         markerViews = mutableListOf()
+        startRunButton = null
         panelVisible = false
         markersVisible = true
         Log.i(logTag, "stop overlay completed")
@@ -96,6 +123,11 @@ class OverlayController private constructor(private val context: Context) {
 
     fun isRunning(): Boolean {
         return bubbleView != null
+    }
+
+    fun syncRunState(runState: String) {
+        currentRunState = runState
+        applyRunStateToPanel()
     }
 
     fun updateRunMarkersFromScript(payload: Map<*, *>) {
@@ -445,29 +477,27 @@ class OverlayController private constructor(private val context: Context) {
         }
 
         val startButton = createActionButton(
-            label = "Start / Resume",
+            label = "Start",
             backgroundColor = "#0F766E",
             textColor = Color.WHITE,
         ).apply {
             setOnClickListener {
-                Log.i(logTag, "panel_action=start_resume clicked")
-                lastStartResumeTapAtMs = System.currentTimeMillis()
-                onStartRun?.invoke()
-                if (panelVisible) {
-                    Log.i(logTag, "panel auto-hide after start_resume")
-                    togglePanel()
+                when (currentRunState) {
+                    "running" -> {
+                        Log.i(logTag, "panel_action=toggle_run pause_clicked")
+                        onPauseRun?.invoke()
+                    }
+                    "paused" -> {
+                        Log.i(logTag, "panel_action=toggle_run resume_clicked")
+                        stopBlockedUntilElapsedMs = SystemClock.elapsedRealtime() + stopDebounceMs
+                        onStartRun?.invoke()
+                    }
+                    else -> {
+                        Log.i(logTag, "panel_action=toggle_run start_clicked")
+                        stopBlockedUntilElapsedMs = SystemClock.elapsedRealtime() + stopDebounceMs
+                        onStartRun?.invoke()
+                    }
                 }
-            }
-        }
-        val pauseButton = createActionButton(
-            label = "Pause",
-            backgroundColor = "#F59E0B",
-            textColor = Color.WHITE,
-        ).apply {
-            text = "Pause"
-            setOnClickListener {
-                Log.i(logTag, "panel_action=pause clicked")
-                onPauseRun?.invoke()
             }
         }
         val stopButton = createActionButton(
@@ -476,8 +506,12 @@ class OverlayController private constructor(private val context: Context) {
             textColor = Color.WHITE,
         ).apply {
             setOnClickListener {
-                if (isStopDebounced()) {
-                    Log.w(logTag, "panel_action=stop ignored by debounce")
+                val debounceRemainingMs = stopDebounceRemainingMs()
+                if (debounceRemainingMs > 0L) {
+                    Log.w(
+                        logTag,
+                        "panel_action=stop ignored by debounce remainingMs=$debounceRemainingMs"
+                    )
                     return@setOnClickListener
                 }
                 Log.i(logTag, "panel_action=stop clicked")
@@ -499,7 +533,6 @@ class OverlayController private constructor(private val context: Context) {
         }
 
         controls.addView(startButton, createActionButtonLayoutParams(0))
-        controls.addView(pauseButton, createActionButtonLayoutParams(dp(8)))
         controls.addView(stopButton, createActionButtonLayoutParams(dp(8)))
         controls.addView(markerButton, createActionButtonLayoutParams(dp(8)))
         container.addView(header)
@@ -520,6 +553,8 @@ class OverlayController private constructor(private val context: Context) {
         container.visibility = View.GONE
         windowManager.addView(container, params)
         panelView = container
+        startRunButton = startButton
+        applyRunStateToPanel()
     }
 
     private fun createEmergencyStop() {
@@ -537,8 +572,12 @@ class OverlayController private constructor(private val context: Context) {
             }
             elevation = 6f
             setOnClickListener {
-                if (isStopDebounced()) {
-                    Log.w(logTag, "emergency_stop ignored by debounce")
+                val debounceRemainingMs = stopDebounceRemainingMs()
+                if (debounceRemainingMs > 0L) {
+                    Log.w(
+                        logTag,
+                        "emergency_stop ignored by debounce remainingMs=$debounceRemainingMs"
+                    )
                     return@setOnClickListener
                 }
                 Log.i(logTag, "emergency_stop clicked")
@@ -583,35 +622,13 @@ class OverlayController private constructor(private val context: Context) {
                 dp(36),
                 dp(36),
                 overlayType(),
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT,
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
                 x = (point.x * maxX).roundToInt().coerceIn(0, maxX)
                 y = (point.y * maxY).roundToInt().coerceIn(0, maxY)
-            }
-
-            var touchX = 0f
-            var touchY = 0f
-            var startX = 0
-            var startY = 0
-            marker.setOnTouchListener { _, event ->
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        touchX = event.rawX
-                        touchY = event.rawY
-                        startX = params.x
-                        startY = params.y
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        params.x = (startX + (event.rawX - touchX).toInt()).coerceIn(0, maxX)
-                        params.y = (startY + (event.rawY - touchY).toInt()).coerceIn(0, maxY)
-                        windowManager.updateViewLayout(marker, params)
-                        true
-                    }
-                    else -> false
-                }
             }
 
             windowManager.addView(marker, params)
@@ -769,9 +786,57 @@ class OverlayController private constructor(private val context: Context) {
         Log.i(logTag, "markers_visible=$markersVisible count=${markerViews.size}")
     }
 
-    private fun isStopDebounced(): Boolean {
-        val elapsed = System.currentTimeMillis() - lastStartResumeTapAtMs
-        return elapsed in 0 until stopDebounceMs
+    private fun stopDebounceRemainingMs(): Long {
+        return (stopBlockedUntilElapsedMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+    }
+
+    private fun applyRunStateToPanel() {
+        val startButton = startRunButton
+        if (startButton == null) {
+            return
+        }
+        when (currentRunState) {
+            "running" -> {
+                startButton.text = "Pause"
+                startButton.isEnabled = true
+                styleActionButton(
+                    button = startButton,
+                    backgroundColor = "#F59E0B",
+                    textColor = Color.WHITE
+                )
+            }
+            "paused" -> {
+                startButton.text = "Resume"
+                startButton.isEnabled = true
+                styleActionButton(
+                    button = startButton,
+                    backgroundColor = "#0F766E",
+                    textColor = Color.WHITE
+                )
+            }
+            else -> {
+                startButton.text = "Start"
+                startButton.isEnabled = true
+                styleActionButton(
+                    button = startButton,
+                    backgroundColor = "#0F766E",
+                    textColor = Color.WHITE
+                )
+            }
+        }
+    }
+
+    private fun styleActionButton(
+        button: Button,
+        backgroundColor: String,
+        textColor: Int,
+    ) {
+        button.setTextColor(textColor)
+        button.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(10).toFloat()
+            setColor(Color.parseColor(backgroundColor))
+        }
     }
 
     private fun stopPointPickerInternal() {

@@ -69,7 +69,7 @@ class NormalQuickConfig {
     final startDelaySec = (json['startDelaySec'] as num?)?.toInt() ?? 0;
     return NormalQuickConfig(
       intervalMs: intervalMs < 1 ? 1 : intervalMs,
-      loopCount: loopCount < 1 ? 1 : loopCount,
+      loopCount: loopCount < 0 ? 0 : loopCount,
       startDelaySec: startDelaySec < 0 ? 0 : startDelaySec,
       singleTargetX: (json['singleTargetX'] as num?)?.toDouble(),
       singleTargetY: (json['singleTargetY'] as num?)?.toDouble(),

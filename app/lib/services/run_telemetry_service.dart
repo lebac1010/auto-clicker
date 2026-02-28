@@ -68,6 +68,8 @@ class RunTelemetryService {
         return 'user';
       case 'error':
         return 'error';
+      case 'loop_completed':
+        return 'loop_completed';
       case 'permission_lost':
         return 'permission_lost';
       case 'service_killed':

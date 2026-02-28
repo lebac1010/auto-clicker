@@ -13,6 +13,7 @@ import 'package:auto_clicker/services/analytics_service.dart';
 import 'package:auto_clicker/services/floating_controller_service.dart';
 import 'package:auto_clicker/services/permission_service.dart';
 import 'package:auto_clicker/services/run_execution_service.dart';
+import 'package:auto_clicker/services/run_engine_service.dart';
 import 'package:auto_clicker/widgets/accessibility_disclosure_dialog.dart';
 import 'package:flutter/material.dart';
 
@@ -24,6 +25,7 @@ class ScriptListScreen extends StatefulWidget {
 }
 
 class _ScriptListScreenState extends State<ScriptListScreen> {
+  static const int _minSafeStartDelaySec = 2;
   final ScriptRepository _repository = ScriptRepository.instance;
   final TextEditingController _searchController = TextEditingController();
   List<ScriptModel> _scripts = <ScriptModel>[];
@@ -148,12 +150,43 @@ class _ScriptListScreenState extends State<ScriptListScreen> {
     if (runOptions == null) {
       return;
     }
-    await FloatingControllerService.start();
+    final safeStartDelaySec = runOptions.startDelaySec < _minSafeStartDelaySec
+        ? _minSafeStartDelaySec
+        : runOptions.startDelaySec;
+    if (safeStartDelaySec != runOptions.startDelaySec && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Applying safe start delay of ${_minSafeStartDelaySec}s to prevent accidental touches.',
+          ),
+        ),
+      );
+    }
+    final resolvedRunOptions = runOptions.copyWith(
+      startDelaySec: safeStartDelaySec,
+    );
     final started = await RunExecutionService.instance.runWithOptions(
       script,
-      runOptions,
+      resolvedRunOptions,
     );
     if (started) {
+      final overlayStarted = await FloatingControllerService.start();
+      if (!overlayStarted) {
+        await RunEngineService.stop();
+        await _load();
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not open Floating Controller. Run has been stopped.',
+            ),
+          ),
+        );
+        return;
+      }
+      await FloatingControllerService.updateRunMarkers(script);
       await _repository.markRun(id);
       AnalyticsService.logEvent(
         'script_run_started',
@@ -163,15 +196,19 @@ class _ScriptListScreenState extends State<ScriptListScreen> {
           'steps_count': script.steps.length,
           'loop_mode': script.loopCount > 0 ? 'count' : 'infinite',
           'source': 'script_list',
-          'start_delay_sec': runOptions.startDelaySec,
-          'stop_rule': runOptions.stopRule.name,
-          'performance_mode': runOptions.performanceMode.name,
+          'start_delay_sec': resolvedRunOptions.startDelaySec,
+          'stop_rule': resolvedRunOptions.stopRule.name,
+          'performance_mode': resolvedRunOptions.performanceMode.name,
           'screen_name': 'script_list',
         },
       );
     }
     await _load();
     if (!mounted) {
+      return;
+    }
+    final failureCode = RunExecutionService.instance.lastFailureCode;
+    if (!started && failureCode == 'RUN_START_SUPERSEDED') {
       return;
     }
     final failureMessage = RunExecutionService.instance.lastFailureMessage;

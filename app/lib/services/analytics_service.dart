@@ -85,6 +85,7 @@ class AnalyticsService {
         'script_run_stopped': <String, Set<String>>{
           'stop_reason': <String>{
             'user',
+            'loop_completed',
             'error',
             'permission_lost',
             'service_killed',

@@ -48,7 +48,7 @@ class RunEngineManager private constructor() {
                         logTag,
                         "auto_stop reason=loop_completed scriptId=${currentScript.id} completedLoops=$completedLoops"
                     )
-                    stop(StopReason.USER)
+                    stop(StopReason.LOOP_COMPLETED)
                     return
                 }
             }
@@ -141,6 +141,14 @@ class RunEngineManager private constructor() {
         payload: ScriptPayload,
         rememberAsLast: Boolean
     ): Boolean {
+        if (runState != RunState.IDLE) {
+            emitError("RUN_ALREADY_ACTIVE", "Another run is already active.")
+            Log.w(
+                logTag,
+                "runScript blocked scriptId=${payload.id}: state=${runState.value}"
+            )
+            return false
+        }
         val failure = evaluatePreflightFailure(payload)
         if (failure != null) {
             emitError(failure.code, failure.message)
@@ -225,6 +233,7 @@ class RunEngineManager private constructor() {
             return false
         }
         val currentScriptId = script?.id
+        val currentCompletedLoops = completedLoops
         val elapsed = if (startedAtMs > 0L) {
             (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L)
         } else {
@@ -234,7 +243,7 @@ class RunEngineManager private constructor() {
         runState = RunState.IDLE
         emitState()
         if (currentScriptId != null) {
-            emitRunStopped(currentScriptId, reason, elapsed)
+            emitRunStopped(currentScriptId, reason, elapsed, currentCompletedLoops)
         }
         script = null
         activeSteps = emptyList()
@@ -279,13 +288,19 @@ class RunEngineManager private constructor() {
         )
     }
 
-    private fun emitRunStopped(scriptId: String, reason: StopReason, elapsedMs: Long) {
+    private fun emitRunStopped(
+        scriptId: String,
+        reason: StopReason,
+        elapsedMs: Long,
+        completedLoops: Int
+    ) {
         emitEvent(
             mapOf(
                 "type" to "runStopped",
                 "scriptId" to scriptId,
                 "stopReason" to reason.value,
-                "elapsedMs" to elapsedMs
+                "elapsedMs" to elapsedMs,
+                "completedLoops" to completedLoops.coerceAtLeast(0)
             )
         )
     }
@@ -495,6 +510,7 @@ private enum class RunState(val value: String) {
 
 enum class StopReason(val value: String) {
     USER("user"),
+    LOOP_COMPLETED("loop_completed"),
     ERROR("error"),
     PERMISSION_LOST("permission_lost"),
     SERVICE_KILLED("service_killed"),

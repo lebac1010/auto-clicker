@@ -25,6 +25,7 @@ class AdvancedHomeScreen extends StatefulWidget {
 
 class _AdvancedHomeScreenState extends State<AdvancedHomeScreen>
     with WidgetsBindingObserver {
+  static const int _minSafeStartDelaySec = 2;
   PermissionState _permissionState = PermissionState.fallback;
   final ScriptRepository _repository = ScriptRepository.instance;
   List<ScriptModel> _recentScripts = <ScriptModel>[];
@@ -116,9 +117,24 @@ class _AdvancedHomeScreenState extends State<AdvancedHomeScreen>
     if (runOptions == null) {
       return;
     }
+    final safeStartDelaySec = runOptions.startDelaySec < _minSafeStartDelaySec
+        ? _minSafeStartDelaySec
+        : runOptions.startDelaySec;
+    if (safeStartDelaySec != runOptions.startDelaySec && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Applying safe start delay of ${_minSafeStartDelaySec}s to prevent accidental touches.',
+          ),
+        ),
+      );
+    }
+    final resolvedRunOptions = runOptions.copyWith(
+      startDelaySec: safeStartDelaySec,
+    );
     final started = await RunExecutionService.instance.runWithOptions(
       script,
-      runOptions,
+      resolvedRunOptions,
     );
     if (started) {
       final overlayStarted = await FloatingControllerService.start();
@@ -131,7 +147,7 @@ class _AdvancedHomeScreenState extends State<AdvancedHomeScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Không thể mở Floating Controller, run đã được dừng.',
+              'Could not open Floating Controller. Run has been stopped.',
             ),
           ),
         );
@@ -147,15 +163,19 @@ class _AdvancedHomeScreenState extends State<AdvancedHomeScreen>
           'steps_count': script.steps.length,
           'loop_mode': script.loopCount > 0 ? 'count' : 'infinite',
           'source': 'home',
-          'start_delay_sec': runOptions.startDelaySec,
-          'stop_rule': runOptions.stopRule.name,
-          'performance_mode': runOptions.performanceMode.name,
+          'start_delay_sec': resolvedRunOptions.startDelaySec,
+          'stop_rule': resolvedRunOptions.stopRule.name,
+          'performance_mode': resolvedRunOptions.performanceMode.name,
           'screen_name': 'home',
         },
       );
     }
     await _refresh();
     if (!mounted) {
+      return;
+    }
+    final failureCode = RunExecutionService.instance.lastFailureCode;
+    if (!started && failureCode == 'RUN_START_SUPERSEDED') {
       return;
     }
     final failureMessage = RunExecutionService.instance.lastFailureMessage;
@@ -332,29 +352,63 @@ class _AdvancedHomeScreenState extends State<AdvancedHomeScreen>
         title: const Text('Home'),
         actions: [
           IconButton(
-            onPressed: () {
-              Navigator.of(context).pushNamed(AutoClickerApp.settingsRoute);
-            },
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Open settings',
-          ),
-          IconButton(
             onPressed: _refresh,
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh status',
           ),
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            onSelected: (value) {
+              switch (value) {
+                case 'scripts':
+                  Navigator.of(
+                    context,
+                  ).pushNamed(AutoClickerApp.scriptListRoute);
+                  break;
+                case 'scheduler':
+                  Navigator.of(
+                    context,
+                  ).pushNamed(AutoClickerApp.schedulerRoute);
+                  break;
+                case 'recorder':
+                  Navigator.of(context).pushNamed(AutoClickerApp.recorderRoute);
+                  break;
+                case 'import_export':
+                  Navigator.of(
+                    context,
+                  ).pushNamed(AutoClickerApp.importExportRoute);
+                  break;
+                case 'settings':
+                  Navigator.of(context).pushNamed(AutoClickerApp.settingsRoute);
+                  break;
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'scripts', child: Text('Script List')),
+              const PopupMenuItem(value: 'scheduler', child: Text('Scheduler')),
+              if (FeatureFlags.recorderEnabled)
+                const PopupMenuItem(value: 'recorder', child: Text('Recorder')),
+              if (FeatureFlags.dualFormatImportExportEnabled)
+                const PopupMenuItem(
+                  value: 'import_export',
+                  child: Text('Import / Export'),
+                ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(value: 'settings', child: Text('Settings')),
+            ],
+          ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _createQuickScript,
+        tooltip: 'Create new script',
+        child: const Icon(Icons.add),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                const Text(
-                  'TapMacro Dashboard',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 12),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
@@ -367,26 +421,16 @@ class _AdvancedHomeScreenState extends State<AdvancedHomeScreen>
                       label: 'Overlay',
                       enabled: _permissionState.overlayEnabled,
                     ),
-                    _StatusChip(
-                      label: 'Notifications',
-                      enabled: _permissionState.notificationsEnabled,
-                    ),
-                    _StatusChip(
-                      label: 'Battery',
-                      enabled: _permissionState.batteryOptimizationIgnored,
-                    ),
-                    _StatusChip(
-                      label: 'Exact Alarm',
-                      enabled: _permissionState.exactAlarmAllowed,
-                    ),
                     _StatusChip(label: 'Run', enabled: _runState == 'running'),
                   ],
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'State: $_runState - Step: $_currentStep - Loop: $_currentLoop - Elapsed: ${_elapsedMs}ms',
-                ),
-                const SizedBox(height: 20),
+                if (_runState != 'idle') ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Step: $_currentStep · Loop: $_currentLoop · ${_elapsedMs}ms',
+                  ),
+                ],
+                const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(
@@ -400,88 +444,38 @@ class _AdvancedHomeScreenState extends State<AdvancedHomeScreen>
                     ),
                   ),
                 ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _runState == 'running' ? _pauseRun : null,
-                        child: const Text('Pause Run'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _runState == 'paused' ? _resumeRun : null,
-                        child: const Text('Resume Run'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _runState != 'idle' ? _stopRun : null,
-                        child: const Text('Stop Run'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () {
-                      Navigator.of(
-                        context,
-                      ).pushNamed(AutoClickerApp.scriptListRoute);
-                    },
-                    child: const Text('Open Script List'),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () {
-                      Navigator.of(context).pushNamed(AutoClickerApp.schedulerRoute);
-                    },
-                    child: const Text('Open Scheduler'),
-                  ),
-                ),
-                if (FeatureFlags.recorderEnabled) const SizedBox(height: 10),
-                if (FeatureFlags.recorderEnabled)
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton(
-                      onPressed: () {
-                        Navigator.of(
-                          context,
-                        ).pushNamed(AutoClickerApp.recorderRoute);
-                      },
-                      child: const Text('Open Recorder'),
-                    ),
-                  ),
-                if (FeatureFlags.dualFormatImportExportEnabled)
+                if (_runState != 'idle') ...[
                   const SizedBox(height: 10),
-                if (FeatureFlags.dualFormatImportExportEnabled)
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton(
-                      onPressed: () {
-                        Navigator.of(
-                          context,
-                        ).pushNamed(AutoClickerApp.importExportRoute);
-                      },
-                      child: const Text('Import / Export'),
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _runState == 'running' ? _pauseRun : null,
+                          child: const Text('Pause'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _runState == 'paused' ? _resumeRun : null,
+                          child: const Text('Resume'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: _stopRun,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Theme.of(
+                              context,
+                            ).colorScheme.error,
+                          ),
+                          child: const Text('Stop'),
+                        ),
+                      ),
+                    ],
                   ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: _createQuickScript,
-                    child: const Text('Create New Script'),
-                  ),
-                ),
+                ],
                 const SizedBox(height: 20),
                 const Text(
                   'Recent Scripts',
@@ -489,7 +483,28 @@ class _AdvancedHomeScreenState extends State<AdvancedHomeScreen>
                 ),
                 const SizedBox(height: 8),
                 if (_recentScripts.isEmpty)
-                  const Text('No scripts yet.')
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 32),
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.description_outlined,
+                            size: 64,
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
+                          const SizedBox(height: 12),
+                          const Text('No scripts yet'),
+                          const SizedBox(height: 8),
+                          FilledButton.icon(
+                            onPressed: _createQuickScript,
+                            icon: const Icon(Icons.add),
+                            label: const Text('Create your first script'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
                 else
                   ..._recentScripts.map(
                     (script) => Card(

@@ -102,7 +102,11 @@ class AutoClickAccessibilityService : AccessibilityService() {
             )
             .build()
 
-        return dispatchGesture(gesture, null, null)
+        val dispatched = dispatchGesture(gesture, null, null)
+        if (!dispatched) {
+            Log.w(logTag, "performTapPx dispatchGesture=false x=$xPx y=$yPx durationMs=$durationMs")
+        }
+        return dispatched
     }
 
     fun performDoubleTapNormalized(
@@ -149,7 +153,14 @@ class AutoClickAccessibilityService : AccessibilityService() {
                 GestureDescription.StrokeDescription(path, 0L, durationMs.coerceAtLeast(1L))
             )
             .build()
-        return dispatchGesture(gesture, null, null)
+        val dispatched = dispatchGesture(gesture, null, null)
+        if (!dispatched) {
+            Log.w(
+                logTag,
+                "performSwipeNormalized dispatchGesture=false start=($startX,$startY) end=($endX,$endY) durationMs=$durationMs"
+            )
+        }
+        return dispatched
     }
 
     fun performMultiTouchNormalized(
@@ -184,7 +195,14 @@ class AutoClickAccessibilityService : AccessibilityService() {
                 )
             )
             .build()
-        return dispatchGesture(gesture, null, null)
+        val dispatched = dispatchGesture(gesture, null, null)
+        if (!dispatched) {
+            Log.w(
+                logTag,
+                "performMultiTouchNormalized dispatchGesture=false first=($firstX,$firstY) second=($secondX,$secondY) durationMs=$durationMs"
+            )
+        }
+        return dispatched
     }
 
     private fun performDoubleTapPx(
@@ -205,7 +223,14 @@ class AutoClickAccessibilityService : AccessibilityService() {
                 GestureDescription.StrokeDescription(secondPath, secondTapStart, tapDuration)
             )
             .build()
-        return dispatchGesture(gesture, null, null)
+        val dispatched = dispatchGesture(gesture, null, null)
+        if (!dispatched) {
+            Log.w(
+                logTag,
+                "performDoubleTapPx dispatchGesture=false x=$xPx y=$yPx durationMs=$durationMs gapMs=$gapMs"
+            )
+        }
+        return dispatched
     }
 
     companion object {

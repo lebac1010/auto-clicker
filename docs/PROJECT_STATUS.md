@@ -372,6 +372,20 @@ Gate can chay de khoa trang thai:
    - Debounce 700ms cho `Stop` va `Emergency Stop` ngay sau `Start / Resume`.
    - Normal mode ap dung `startDelaySec` toi thieu 2s khi run (single/multi) de tranh tap vao UI noi bo.
    - Analytics `start_delay_sec` tren Normal duoc ghi theo gia tri delay thuc te da ap dung.
+29. UI refactor regression fix:
+   - Sua menu `switch` trong `Normal` va `Advanced` home de khong bi fall-through.
+   - Khoi phuc capability bi mat o `Normal`: chon script multi-target, run multi-target, quan ly script, toggle floating controller.
+   - Dong bo `Script Editor` run flow theo contract an toan:
+     - start run truoc, mo overlay sau;
+     - neu overlay fail thi stop run ngay;
+     - cap nhat marker theo script dang run.
+30. Overlay logic hardening:
+   - Debounce `Stop`/`Emergency Stop` chuyen sang monotonic clock (`elapsedRealtime`) de tranh false trigger do wall-clock.
+   - Them log chi tiet `remainingMs` khi `Stop` bi block boi debounce de debug ro hon.
+   - Chot owner cho `setRunCallbacks` (`main_activity` / `scheduler_manager`) va khong de scheduler override callback neu da co callback chinh.
+31. Fix crash giao dien Normal:
+   - Sua layout card Single Target de bo `Spacer/Expanded` trong `ListView` (nguyen nhan unbounded height crash `RenderFlex`).
+   - Chuyen hero card sang `mainAxisSize: min` + spacing co dinh de on dinh render.
 
 ---
 

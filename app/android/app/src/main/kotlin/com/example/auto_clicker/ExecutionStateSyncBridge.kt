@@ -17,12 +17,15 @@ object ExecutionStateSyncBridge {
             val appContext = context.applicationContext
             val runEngineManager = RunEngineManager.getInstance()
             val recorderManager = RecorderManager.getInstance()
+            val overlayController = OverlayController.getInstance(appContext)
             runEngineManager.setStateListener { runState ->
                 ExecutionForegroundCoordinator.sync(appContext, runState, recorderManager.getState())
+                overlayController.syncRunState(runState)
             }
             recorderManager.setStateListener { recorderState ->
                 ExecutionForegroundCoordinator.sync(appContext, runEngineManager.getState(), recorderState)
             }
+            overlayController.syncRunState(runEngineManager.getState())
             ExecutionForegroundCoordinator.sync(
                 appContext,
                 runEngineManager.getState(),

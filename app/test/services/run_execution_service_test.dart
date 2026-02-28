@@ -57,7 +57,7 @@ class _FakeRunEngineGateway extends RunEngineGateway {
 }
 
 void main() {
-  ScriptModel makeScript() {
+  ScriptModel makeScript({int stepIntervalMs = 50}) {
     final now = DateTime(2026, 2, 24, 9, 0, 0);
     return ScriptModel(
       id: 'scr_run_exec',
@@ -67,12 +67,12 @@ void main() {
       updatedAt: now,
       defaultIntervalMs: 100,
       loopCount: 5,
-      steps: const <ScriptStep>[
+      steps: <ScriptStep>[
         ScriptStep(
           id: 'step_1',
           x: 0.2,
           y: 0.3,
-          intervalMs: 50,
+          intervalMs: stepIntervalMs,
           enabled: true,
         ),
       ],
@@ -156,5 +156,43 @@ void main() {
     expect(started, isFalse);
     expect(service.lastFailureCode, 'RUN_START_FAILED');
     expect(service.lastFailureMessage, 'Unable to start run engine.');
+  });
+
+  test('newer start request supersedes older pending delayed start', () async {
+    gateway.validationResult = const RunConditionValidationResult(ok: true);
+    gateway.runScriptResult = true;
+
+    final firstStart = service.runWithOptions(
+      makeScript(),
+      const RunOptions(startDelaySec: 1),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final secondStart = service.runWithOptions(
+      makeScript(),
+      RunOptions.defaults,
+    );
+
+    final secondResult = await secondStart;
+    final firstResult = await firstStart;
+
+    expect(secondResult, isTrue);
+    expect(firstResult, isFalse);
+    expect(gateway.runCalls, 1);
+  });
+
+  test('fast mode preserves non-positive step interval for native fallback', () async {
+    gateway.validationResult = const RunConditionValidationResult(ok: true);
+    gateway.runScriptResult = true;
+
+    final started = await service.runWithOptions(
+      makeScript(stepIntervalMs: 0),
+      const RunOptions(performanceMode: RunPerformanceMode.fast),
+    );
+
+    expect(started, isTrue);
+    final prepared = gateway.lastRunScript;
+    expect(prepared, isNotNull);
+    expect(prepared!.defaultIntervalMs, 70);
+    expect(prepared.steps.single.intervalMs, 0);
   });
 }

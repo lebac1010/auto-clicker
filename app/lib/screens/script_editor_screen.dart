@@ -9,6 +9,7 @@ import 'package:auto_clicker/services/analytics_service.dart';
 import 'package:auto_clicker/services/floating_controller_service.dart';
 import 'package:auto_clicker/services/permission_service.dart';
 import 'package:auto_clicker/services/run_execution_service.dart';
+import 'package:auto_clicker/services/run_engine_service.dart';
 import 'package:auto_clicker/services/script_validator.dart';
 import 'package:auto_clicker/widgets/accessibility_disclosure_dialog.dart';
 import 'package:flutter/material.dart';
@@ -23,6 +24,7 @@ class ScriptEditorScreen extends StatefulWidget {
 }
 
 class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
+  static const int _minSafeStartDelaySec = 2;
   final ScriptRepository _repository = ScriptRepository.instance;
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _bulkHoldController = TextEditingController(
@@ -30,9 +32,12 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
   );
   final TextEditingController _timeWindowStartController =
       TextEditingController();
-  final TextEditingController _timeWindowEndController = TextEditingController();
-  final TextEditingController _foregroundAppController = TextEditingController();
-  final TextEditingController _minBatteryPctController = TextEditingController();
+  final TextEditingController _timeWindowEndController =
+      TextEditingController();
+  final TextEditingController _foregroundAppController =
+      TextEditingController();
+  final TextEditingController _minBatteryPctController =
+      TextEditingController();
   ScriptModel? _script;
   bool _loading = true;
   int _defaultIntervalMs = 300;
@@ -95,7 +100,9 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
       loopCount: _loopMode == _LoopMode.infinite ? 0 : _loopCount,
       requireCharging: _requireCharging,
       requireScreenOn: _requireScreenOn,
-      requireForegroundApp: _normalizeOptionalText(_foregroundAppController.text),
+      requireForegroundApp: _normalizeOptionalText(
+        _foregroundAppController.text,
+      ),
       minBatteryPct: _parseOptionalInt(
         _minBatteryPctController.text,
         invalidValue: -1,
@@ -168,13 +175,25 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
       return;
     }
     final baseScript = _workingScript;
-    final runOptions = await _openRunOptions(
-      baseScript,
-      testCycle: testCycle,
-    );
+    final runOptions = await _openRunOptions(baseScript, testCycle: testCycle);
     if (runOptions == null) {
       return;
     }
+    final safeStartDelaySec = runOptions.startDelaySec < _minSafeStartDelaySec
+        ? _minSafeStartDelaySec
+        : runOptions.startDelaySec;
+    if (safeStartDelaySec != runOptions.startDelaySec && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Applying safe start delay of ${_minSafeStartDelaySec}s to prevent accidental touches.',
+          ),
+        ),
+      );
+    }
+    final normalizedRunOptions = runOptions.copyWith(
+      startDelaySec: safeStartDelaySec,
+    );
     var current = baseScript;
     final errors = ScriptValidator.validate(current);
     if (errors.isNotEmpty) {
@@ -182,19 +201,35 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
       return;
     }
     await _repository.saveScript(current);
-    final overlayStarted = await FloatingControllerService.start();
     final resolvedOptions = testCycle
-        ? runOptions.copyWith(
+        ? normalizedRunOptions.copyWith(
             stopRule: RunStopRule.loops,
             stopAfterLoops: 1,
             stopAfterDurationSec: null,
           )
-        : runOptions;
+        : normalizedRunOptions;
+    var overlayStarted = false;
     final runStarted = await RunExecutionService.instance.runWithOptions(
       current,
       resolvedOptions,
     );
     if (runStarted) {
+      overlayStarted = await FloatingControllerService.start();
+      if (!overlayStarted) {
+        await RunEngineService.stop();
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not open Floating Controller. Run has been stopped.',
+            ),
+          ),
+        );
+        return;
+      }
+      await FloatingControllerService.updateRunMarkers(current);
       await _repository.markRun(current.id);
       AnalyticsService.logEvent(
         'script_run_started',
@@ -214,16 +249,17 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
     if (!mounted) {
       return;
     }
+    final failureCode = RunExecutionService.instance.lastFailureCode;
+    if (!runStarted && failureCode == 'RUN_START_SUPERSEDED') {
+      return;
+    }
     final failureMessage = RunExecutionService.instance.lastFailureMessage;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           runStarted
               ? (testCycle ? 'Test cycle started' : 'Run started')
-              : (failureMessage ??
-                    (overlayStarted
-                        ? 'Overlay started, but run engine failed'
-                        : 'Unable to start run. Check overlay permission')),
+              : (failureMessage ?? 'Unable to start run.'),
         ),
       ),
     );
@@ -234,10 +270,7 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
     required bool testCycle,
   }) {
     final initialOptions = testCycle
-        ? const RunOptions(
-            stopRule: RunStopRule.loops,
-            stopAfterLoops: 1,
-          )
+        ? const RunOptions(stopRule: RunStopRule.loops, stopAfterLoops: 1)
         : RunOptions.defaults;
     return Navigator.of(context).push<RunOptions>(
       MaterialPageRoute<RunOptions>(
@@ -607,16 +640,14 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 4,
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Script Editor'),
           bottom: const TabBar(
             tabs: [
               Tab(text: 'Targets'),
-              Tab(text: 'Timing'),
-              Tab(text: 'Gestures'),
-              Tab(text: 'Conditions'),
+              Tab(text: 'Settings'),
             ],
           ),
           actions: [
@@ -641,12 +672,7 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
                   ),
                   Expanded(
                     child: TabBarView(
-                      children: [
-                        _buildTargetsTab(),
-                        _buildTimingTab(),
-                        _buildGesturesTab(),
-                        _buildConditionsTab(),
-                      ],
+                      children: [_buildTargetsTab(), _buildSettingsTab()],
                     ),
                   ),
                   Padding(
@@ -720,9 +746,7 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
                           title: Text(
                             'Point #${index + 1} (${point.x}, ${point.y})',
                           ),
-                          subtitle: Text(
-                            _describePoint(point),
-                          ),
+                          subtitle: Text(_describePoint(point)),
                           leading: Switch(
                             value: point.enabled,
                             onChanged: (value) => _togglePoint(index, value),
@@ -751,199 +775,231 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
     );
   }
 
-  Widget _buildTimingTab() {
-    return Padding(
+  Widget _buildSettingsTab() {
+    final hasPoints = _script != null && _script!.steps.isNotEmpty;
+    return ListView(
       padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
+      children: [
+        const Text(
+          'Timing',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          initialValue: _defaultIntervalMs.toString(),
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+            labelText: 'Global interval (ms)',
+            helperText: 'Applied when point interval override is not set',
+          ),
+          onChanged: (value) {
+            final parsed = int.tryParse(value);
+            if (parsed != null) {
+              _defaultIntervalMs = parsed;
+            }
+          },
+        ),
+        const SizedBox(height: 16),
+        DropdownButtonFormField<_LoopMode>(
+          initialValue: _loopMode,
+          decoration: const InputDecoration(labelText: 'Loop mode'),
+          items: const [
+            DropdownMenuItem(value: _LoopMode.count, child: Text('Count')),
+            DropdownMenuItem(
+              value: _LoopMode.infinite,
+              child: Text('Infinite'),
+            ),
+          ],
+          onChanged: (value) {
+            if (value == null) {
+              return;
+            }
+            setState(() => _loopMode = value);
+          },
+        ),
+        const SizedBox(height: 16),
+        if (_loopMode == _LoopMode.count)
           TextFormField(
-            initialValue: _defaultIntervalMs.toString(),
+            initialValue: _loopCount.toString(),
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(
-              labelText: 'Global interval (ms)',
-              helperText: 'Applied when point interval override is not set',
+              labelText: 'Loop count',
+              helperText: 'Set > 0 for count mode.',
             ),
             onChanged: (value) {
               final parsed = int.tryParse(value);
               if (parsed != null) {
-                _defaultIntervalMs = parsed;
+                _loopCount = parsed;
               }
             },
+          )
+        else
+          const ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text('Infinite loop enabled'),
+            subtitle: Text('Script runs until you stop it manually.'),
           ),
-          const SizedBox(height: 16),
-          DropdownButtonFormField<_LoopMode>(
-            initialValue: _loopMode,
-            decoration: const InputDecoration(
-              labelText: 'Loop mode',
-            ),
-            items: const [
-              DropdownMenuItem(
-                value: _LoopMode.count,
-                child: Text('Count'),
-              ),
-              DropdownMenuItem(
-                value: _LoopMode.infinite,
-                child: Text('Infinite'),
-              ),
-            ],
-            onChanged: (value) {
-              if (value == null) {
-                return;
-              }
-              setState(() => _loopMode = value);
-            },
-          ),
-          const SizedBox(height: 16),
-          if (_loopMode == _LoopMode.count)
-            TextFormField(
-              initialValue: _loopCount.toString(),
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Loop count',
-                helperText: 'Set > 0 for count mode.',
-              ),
-              onChanged: (value) {
-                final parsed = int.tryParse(value);
-                if (parsed != null) {
-                  _loopCount = parsed;
-                }
-              },
-            )
-          else
-            const ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text('Infinite loop enabled'),
-              subtitle: Text('Script runs until you stop it manually.'),
-            ),
-        ],
-      ),
+        const SizedBox(height: 24),
+        const Divider(),
+        const SizedBox(height: 16),
+        const Text(
+          'Hold Duration',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Set hold duration in milliseconds for all points. '
+          'Use 40ms for normal tap, larger values for long-press.',
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _bulkHoldController,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Hold duration (ms)'),
+        ),
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          onPressed: hasPoints ? _applyHoldToAllPoints : null,
+          icon: const Icon(Icons.done_all),
+          label: const Text('Apply to all points'),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Tip: Set action per point in point editor. Swipe uses x2/y2 and swipe duration.',
+          style: TextStyle(color: Colors.black54),
+        ),
+        const SizedBox(height: 24),
+        const Divider(),
+        const SizedBox(height: 16),
+        OutlinedButton.icon(
+          onPressed: _openConditionsSheet,
+          icon: const Icon(Icons.tune),
+          label: const Text('Advanced Conditions'),
+        ),
+      ],
     );
   }
 
-  Widget _buildGesturesTab() {
-    final hasPoints = _script != null && _script!.steps.isNotEmpty;
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Long Press (Hold)',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Set hold duration in milliseconds for all points. '
-            'Use 40ms for normal tap, larger values for long-press.',
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _bulkHoldController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'Hold duration (ms)',
+  void _openConditionsSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) => DraggableScrollableSheet(
+          initialChildSize: 0.7,
+          minChildSize: 0.4,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) => Padding(
+            padding: const EdgeInsets.all(16),
+            child: ListView(
+              controller: scrollController,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Advanced Conditions',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Require charging'),
+                  subtitle: const Text(
+                    'Script only runs when device is charging or battery is full.',
+                  ),
+                  value: _requireCharging,
+                  onChanged: (value) {
+                    setSheetState(() => _requireCharging = value);
+                    setState(() {});
+                  },
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Require screen ON'),
+                  subtitle: const Text(
+                    'Script only runs when screen is interactive/unlocked.',
+                  ),
+                  value: _requireScreenOn,
+                  onChanged: (value) {
+                    setSheetState(() => _requireScreenOn = value);
+                    setState(() {});
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _foregroundAppController,
+                  decoration: const InputDecoration(
+                    labelText: 'Require foreground app package (optional)',
+                    hintText: 'com.example.app',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'If set, script only runs when this app is currently in foreground.',
+                  style: TextStyle(color: Colors.black54),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _minBatteryPctController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Minimum battery % (optional)',
+                    hintText: '30',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Use values 0-100. Leave empty to disable this condition.',
+                  style: TextStyle(color: Colors.black54),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Active time window (optional)',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Use HH:mm format. If left empty, script can run any time.',
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _timeWindowStartController,
+                  keyboardType: TextInputType.datetime,
+                  decoration: const InputDecoration(
+                    labelText: 'Start (HH:mm)',
+                    hintText: '22:00',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _timeWindowEndController,
+                  keyboardType: TextInputType.datetime,
+                  decoration: const InputDecoration(
+                    labelText: 'End (HH:mm)',
+                    hintText: '06:00',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Overnight windows are supported (e.g., 22:00 -> 06:00).',
+                  style: TextStyle(color: Colors.black54),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 12),
-          FilledButton.icon(
-            onPressed: hasPoints ? _applyHoldToAllPoints : null,
-            icon: const Icon(Icons.done_all),
-            label: const Text('Apply to all points'),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Tip: Set action per point in point editor. Swipe uses x2/y2 and swipe duration.',
-            style: TextStyle(color: Colors.black54),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildConditionsTab() {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: ListView(
-        children: [
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Require charging'),
-            subtitle: const Text(
-              'Script only runs when device is charging or battery is full.',
-            ),
-            value: _requireCharging,
-            onChanged: (value) => setState(() => _requireCharging = value),
-          ),
-          const SizedBox(height: 8),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Require screen ON'),
-            subtitle: const Text(
-              'Script only runs when screen is interactive/unlocked.',
-            ),
-            value: _requireScreenOn,
-            onChanged: (value) => setState(() => _requireScreenOn = value),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _foregroundAppController,
-            decoration: const InputDecoration(
-              labelText: 'Require foreground app package (optional)',
-              hintText: 'com.example.app',
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'If set, script only runs when this app is currently in foreground.',
-            style: TextStyle(color: Colors.black54),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _minBatteryPctController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'Minimum battery % (optional)',
-              hintText: '30',
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Use values 0-100. Leave empty to disable this condition.',
-            style: TextStyle(color: Colors.black54),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            'Active time window (optional)',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Use HH:mm format. If left empty, script can run any time.',
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _timeWindowStartController,
-            keyboardType: TextInputType.datetime,
-            decoration: const InputDecoration(
-              labelText: 'Start (HH:mm)',
-              hintText: '22:00',
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _timeWindowEndController,
-            keyboardType: TextInputType.datetime,
-            decoration: const InputDecoration(
-              labelText: 'End (HH:mm)',
-              hintText: '06:00',
-            ),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            'Overnight windows are supported (e.g., 22:00 -> 06:00).',
-            style: TextStyle(color: Colors.black54),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -958,10 +1014,7 @@ class _ScriptEditorScreenState extends State<ScriptEditorScreen> {
   }
 }
 
-enum _LoopMode {
-  count,
-  infinite,
-}
+enum _LoopMode { count, infinite }
 
 class _PointDialog extends StatefulWidget {
   const _PointDialog({this.initial});
@@ -1052,18 +1105,9 @@ class _PointDialogState extends State<_PointDialog> {
             initialValue: _action,
             decoration: const InputDecoration(labelText: 'Action'),
             items: const [
-              DropdownMenuItem(
-                value: 'tap',
-                child: Text('Tap'),
-              ),
-              DropdownMenuItem(
-                value: 'double_tap',
-                child: Text('Double Tap'),
-              ),
-              DropdownMenuItem(
-                value: 'swipe',
-                child: Text('Swipe'),
-              ),
+              DropdownMenuItem(value: 'tap', child: Text('Tap')),
+              DropdownMenuItem(value: 'double_tap', child: Text('Double Tap')),
+              DropdownMenuItem(value: 'swipe', child: Text('Swipe')),
               DropdownMenuItem(
                 value: 'multi_touch',
                 child: Text('Multi-touch'),
@@ -1079,12 +1123,16 @@ class _PointDialogState extends State<_PointDialog> {
             const SizedBox(height: 8),
             TextField(
               controller: _x2Controller,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(labelText: 'x2 (0..1)'),
             ),
             TextField(
               controller: _y2Controller,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(labelText: 'y2 (0..1)'),
             ),
             TextField(

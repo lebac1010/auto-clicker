@@ -1,14 +1,13 @@
 ﻿import 'dart:async';
 
-import 'package:auto_clicker/data/script_repository.dart';
 import 'package:auto_clicker/main.dart';
+import 'package:auto_clicker/data/script_repository.dart';
 import 'package:auto_clicker/models/normal_quick_config.dart';
 import 'package:auto_clicker/models/permission_state.dart';
 import 'package:auto_clicker/models/run_options.dart';
 import 'package:auto_clicker/models/script_model.dart';
 import 'package:auto_clicker/models/script_step.dart';
 import 'package:auto_clicker/models/script_type.dart';
-import 'package:auto_clicker/screens/script_editor_screen.dart';
 import 'package:auto_clicker/services/analytics_service.dart';
 import 'package:auto_clicker/services/floating_controller_service.dart';
 import 'package:auto_clicker/services/normal_mode_service.dart';
@@ -31,13 +30,13 @@ class NormalHomeScreen extends StatefulWidget {
 class _NormalHomeScreenState extends State<NormalHomeScreen>
     with WidgetsBindingObserver {
   static const int _minSafeStartDelaySec = 2;
-
   final ScriptRepository _repository = ScriptRepository.instance;
+
   PermissionState _permissionState = PermissionState.fallback;
   NormalQuickConfig _config = NormalQuickConfig.defaults;
   List<ScriptModel> _scripts = <ScriptModel>[];
-  bool _loading = true;
   bool _controllerRunning = false;
+  bool _loading = true;
   String _runState = 'idle';
   StreamSubscription<Map<String, dynamic>>? _runSub;
 
@@ -63,7 +62,9 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
     }
   }
 
-  bool get _isRunActive => _runState == 'running' || _runState == 'paused';
+  bool get _isRunning => _runState == 'running';
+  bool get _isPaused => _runState == 'paused';
+  bool get _isRunActive => _isRunning || _isPaused;
 
   Future<void> _refresh() async {
     setState(() => _loading = true);
@@ -74,9 +75,7 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
       config.multiTargetScriptId,
       scripts,
     );
-    final resolvedConfig = config.copyWith(
-      multiTargetScriptId: selectedScriptId,
-    );
+    final resolvedConfig = config.copyWith(multiTargetScriptId: selectedScriptId);
     if (resolvedConfig.multiTargetScriptId != config.multiTargetScriptId) {
       await NormalModeService.saveConfig(resolvedConfig);
     }
@@ -99,8 +98,7 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
     if (scripts.isEmpty) {
       return null;
     }
-    final hasPreferred = preferred != null && scripts.any((s) => s.id == preferred);
-    if (hasPreferred) {
+    if (preferred != null && scripts.any((script) => script.id == preferred)) {
       return preferred;
     }
     return scripts.first.id;
@@ -115,9 +113,26 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
       setState(() => _runState = event['state']?.toString() ?? 'idle');
       return;
     }
+    if (type == 'runStopped') {
+      final stopReason = event['stopReason']?.toString();
+      if (stopReason == 'loop_completed') {
+        final completedLoops =
+            (event['completedLoops'] as num?)?.toInt() ?? _config.loopCount;
+        if (completedLoops > 0) {
+          _showMessage(
+            'Auto-stopped: completed $completedLoops loops. Press Start to run again.',
+          );
+        } else {
+          _showMessage('Run completed. Press Start to run again.');
+        }
+      }
+      return;
+    }
     if (type == 'error') {
       final message = event['message']?.toString() ?? 'Unknown run error';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
@@ -130,7 +145,9 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
     final intervalController = TextEditingController(
       text: _config.intervalMs.toString(),
     );
-    final loopController = TextEditingController(text: _config.loopCount.toString());
+    final loopController = TextEditingController(
+      text: _config.loopCount.toString(),
+    );
     final delayController = TextEditingController(
       text: _config.startDelaySec.toString(),
     );
@@ -150,7 +167,9 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
             TextField(
               controller: loopController,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Loop count'),
+              decoration: const InputDecoration(
+                labelText: 'Loop count (0 = infinite)',
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -182,8 +201,8 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
       _showMessage('Interval must be >= 1ms.');
       return;
     }
-    if (loopCount == null || loopCount < 1) {
-      _showMessage('Loop count must be >= 1.');
+    if (loopCount == null || loopCount < 0) {
+      _showMessage('Loop count must be >= 0 (0 = infinite).');
       return;
     }
     if (startDelaySec == null || startDelaySec < 0) {
@@ -267,7 +286,9 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
 
   Future<void> _runSingleTarget() async {
     if (_isRunActive) {
-      _showMessage('A run is already active. Stop it before starting another one.');
+      _showMessage(
+        'A run is already active. Stop it before starting another one.',
+      );
       return;
     }
     if (!_config.hasSingleTargetPoint) {
@@ -282,7 +303,7 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
         : _config.startDelaySec;
     if (safeStartDelaySec != _config.startDelaySec) {
       _showMessage(
-        'Đang áp dụng start delay an toàn ${_minSafeStartDelaySec}s để tránh tự chạm nút điều khiển.',
+        'Applying safe start delay of ${_minSafeStartDelaySec}s to prevent accidental touches.',
       );
     }
     final script = _buildSingleTargetScript();
@@ -296,7 +317,7 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
         await RunEngineService.stop();
         await _refresh();
         _showMessage(
-          'Không thể mở Floating Controller, đã dừng run để đảm bảo an toàn.',
+          'Could not open Floating Controller. Run stopped for safety.',
         );
         return;
       }
@@ -317,6 +338,10 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
       );
     }
     await _refresh();
+    final failureCode = RunExecutionService.instance.lastFailureCode;
+    if (!started && failureCode == 'RUN_START_SUPERSEDED') {
+      return;
+    }
     _showMessage(
       started
           ? 'Single target run started.'
@@ -348,17 +373,72 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
     );
   }
 
-  Future<void> _runMultiTarget() async {
-    if (_isRunActive) {
-      _showMessage('A run is already active. Stop it before starting another one.');
+  String get _multiTargetLabel {
+    final selectedId = _config.multiTargetScriptId;
+    if (selectedId == null) {
+      return 'No script selected';
+    }
+    final selected = _scripts.where((script) => script.id == selectedId);
+    if (selected.isEmpty) {
+      return 'No script selected';
+    }
+    return selected.first.name;
+  }
+
+  Future<void> _openMultiTargetSelector() async {
+    if (_scripts.isEmpty) {
+      _showMessage('No scripts available. Create one in Advanced mode.');
       return;
     }
-    final id = _config.multiTargetScriptId;
-    if (id == null) {
-      _showMessage('No script selected. Create a script first.');
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: ListView.builder(
+          itemCount: _scripts.length,
+          itemBuilder: (_, index) {
+            final script = _scripts[index];
+            final isSelected = script.id == _config.multiTargetScriptId;
+            return ListTile(
+              title: Text(script.name),
+              subtitle: Text(script.type.label),
+              trailing: isSelected ? const Icon(Icons.check) : null,
+              onTap: () => Navigator.of(context).pop(script.id),
+            );
+          },
+        ),
+      ),
+    );
+    if (selected == null || selected == _config.multiTargetScriptId) {
+      return;
+    }
+    await _saveConfig(_config.copyWith(multiTargetScriptId: selected));
+  }
+
+  Future<void> _runMultiTarget() async {
+    if (_isRunActive) {
+      _showMessage(
+        'A run is already active. Stop it before starting another one.',
+      );
+      return;
+    }
+    final selectedId = _config.multiTargetScriptId;
+    if (selectedId == null) {
+      _showMessage('Select a script first.');
       return;
     }
     if (!await _ensureRunPermissions()) {
+      return;
+    }
+    final script = await _repository.getScript(selectedId);
+    if (script == null) {
+      _showMessage('Selected script not found.');
+      await _refresh();
+      return;
+    }
+    final validationErrors = ScriptValidator.validate(script);
+    if (validationErrors.isNotEmpty) {
+      _showMessage(validationErrors.first);
       return;
     }
     final safeStartDelaySec = _config.startDelaySec < _minSafeStartDelaySec
@@ -366,19 +446,8 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
         : _config.startDelaySec;
     if (safeStartDelaySec != _config.startDelaySec) {
       _showMessage(
-        'Đang áp dụng start delay an toàn ${_minSafeStartDelaySec}s để tránh tự chạm nút điều khiển.',
+        'Applying safe start delay of ${_minSafeStartDelaySec}s to prevent accidental touches.',
       );
-    }
-    final script = await _repository.getScript(id);
-    if (script == null) {
-      _showMessage('Selected script not found.');
-      await _refresh();
-      return;
-    }
-    final validation = ScriptValidator.validate(script);
-    if (validation.isNotEmpty) {
-      await _showInvalidScriptDialog(script, validation.first);
-      return;
     }
     final started = await RunExecutionService.instance.runWithOptions(
       script,
@@ -390,7 +459,7 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
         await RunEngineService.stop();
         await _refresh();
         _showMessage(
-          'Không thể mở Floating Controller, đã dừng run để đảm bảo an toàn.',
+          'Could not open Floating Controller. Run stopped for safety.',
         );
         return;
       }
@@ -412,17 +481,16 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
       );
     }
     await _refresh();
+    final failureCode = RunExecutionService.instance.lastFailureCode;
+    if (!started && failureCode == 'RUN_START_SUPERSEDED') {
+      return;
+    }
     _showMessage(
       started
           ? 'Multi target run started.'
           : (RunExecutionService.instance.lastFailureMessage ??
                 'Unable to start run.'),
     );
-  }
-
-  Future<void> _stopRun() async {
-    await RunEngineService.stop();
-    await _refresh();
   }
 
   Future<void> _toggleController() async {
@@ -446,37 +514,35 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
     );
   }
 
-  Future<void> _showInvalidScriptDialog(ScriptModel script, String reason) async {
-    if (!mounted) {
+  Future<void> _stopRun() async {
+    await RunEngineService.stop();
+    await _refresh();
+  }
+
+  Future<void> _resumeRunFromNormal() async {
+    if (!_isPaused) {
       return;
     }
-    await showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Script is not runnable'),
-        content: Text(
-          'Script "${script.name}" cannot run from Normal mode.\n\nReason: $reason',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              Navigator.of(context).pop();
-              await Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => ScriptEditorScreen(scriptId: script.id),
-                ),
-              );
-              await _refresh();
-            },
-            child: const Text('Open Advanced Editor'),
-          ),
-        ],
-      ),
-    );
+    if (!await _ensureRunPermissions()) {
+      return;
+    }
+    final resumed = await RunEngineService.resume();
+    if (!resumed) {
+      await _refresh();
+      _showMessage('Unable to resume run.');
+      return;
+    }
+    final overlayStarted = await FloatingControllerService.start();
+    if (!overlayStarted) {
+      await RunEngineService.stop();
+      await _refresh();
+      _showMessage(
+        'Could not open Floating Controller. Run stopped for safety.',
+      );
+      return;
+    }
+    await _refresh();
+    _showMessage('Run resumed.');
   }
 
   Future<bool> _ensureRunPermissions() async {
@@ -554,89 +620,205 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
+    final needsPermissions = !_permissionState.hasCorePermissions;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Normal'),
+        title: const Text('TapMacro'),
         actions: [
-          IconButton(
-            onPressed: _refresh,
-            tooltip: 'Refresh status',
-            icon: const Icon(Icons.refresh),
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            onSelected: (value) {
+              switch (value) {
+                case 'settings':
+                  Navigator.of(context).pushNamed(AutoClickerApp.settingsRoute);
+                  break;
+                case 'permissions':
+                  Navigator.of(
+                    context,
+                  ).pushNamed(AutoClickerApp.permissionsRoute);
+                  break;
+                case 'help':
+                  Navigator.of(context).pushNamed(AutoClickerApp.helpRoute);
+                  break;
+                case 'advanced':
+                  widget.onOpenAdvanced();
+                  break;
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'settings', child: Text('Settings')),
+              const PopupMenuItem(
+                value: 'permissions',
+                child: Text('Permissions'),
+              ),
+              const PopupMenuItem(value: 'help', child: Text('Help')),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'advanced',
+                child: Text('Switch to Advanced'),
+              ),
+            ],
           ),
         ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView(
+          : Padding(
               padding: const EdgeInsets.all(16),
-              children: [
-                _PermissionCard(
-                  state: _permissionState,
-                  controllerRunning: _controllerRunning,
-                  runState: _runState,
-                  onOpenPermissions: () {
-                    Navigator.of(context).pushNamed(AutoClickerApp.permissionsRoute);
-                  },
-                  onToggleController: _toggleController,
-                  onStopRun: _runState == 'idle' ? null : _stopRun,
-                ),
-                const SizedBox(height: 12),
-                _buildSingleTargetCard(),
-                const SizedBox(height: 12),
-                _buildMultiTargetCard(),
-                const SizedBox(height: 12),
-                _buildOtherCard(),
-              ],
+              child: Column(
+                children: [
+                  if (needsPermissions)
+                    Card(
+                      color: Theme.of(context).colorScheme.errorContainer,
+                      child: ListTile(
+                        leading: Icon(
+                          Icons.warning_amber_rounded,
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                        title: const Text('Permissions required'),
+                        subtitle: const Text(
+                          'Tap to enable Accessibility & Overlay.',
+                        ),
+                        onTap: () {
+                          Navigator.of(
+                            context,
+                          ).pushNamed(AutoClickerApp.permissionsRoute);
+                        },
+                      ),
+                    ),
+                  if (needsPermissions) const SizedBox(height: 12),
+                  if (_isRunActive)
+                    Card(
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      child: ListTile(
+                        leading: const Icon(Icons.play_circle_filled),
+                        title: Text('Run state ($_runState)'),
+                        trailing: FilledButton(
+                          onPressed: _stopRun,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Theme.of(
+                              context,
+                            ).colorScheme.error,
+                          ),
+                          child: const Text('Stop'),
+                        ),
+                      ),
+                    ),
+                  if (_isRunActive) const SizedBox(height: 12),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        _buildHeroCard(),
+                        const SizedBox(height: 12),
+                        _buildMultiTargetCard(),
+                        const SizedBox(height: 12),
+                        _buildQuickActionsCard(),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
     );
   }
 
-  Widget _buildSingleTargetCard() {
-    final pointText = _config.hasSingleTargetPoint
+  Widget _buildHeroCard() {
+    final hasPoint = _config.hasSingleTargetPoint;
+    final pointLabel = hasPoint
         ? '(${_config.singleTargetX!.toStringAsFixed(3)}, ${_config.singleTargetY!.toStringAsFixed(3)})'
-        : 'Not selected';
+        : 'No point selected';
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(24),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'SINGLE TARGET MODE',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            Align(
+              alignment: Alignment.centerRight,
+              child: IconButton(
+                onPressed: _openSingleTargetSettings,
+                icon: const Icon(Icons.settings_outlined),
+                tooltip: 'Interval, loop, delay',
+              ),
             ),
-            const SizedBox(height: 12),
-            Text('Current point: $pointText'),
-            Text('Interval: ${_config.intervalMs}ms - Loop: ${_config.loopCount}'),
-            Text('Start delay: ${_config.startDelaySec}s'),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _openSingleTargetSettings,
-                  icon: const Icon(Icons.settings_outlined),
-                  label: const Text('Settings'),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: 120,
+              height: 120,
+              child: Material(
+                shape: const CircleBorder(),
+                color: Theme.of(context).colorScheme.primaryContainer,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: _pickSingleTargetPoint,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        hasPoint
+                            ? Icons.my_location
+                            : Icons.add_location_alt_outlined,
+                        size: 40,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        hasPoint ? 'Change' : 'Pick Point',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                OutlinedButton.icon(
-                  onPressed: _pickSingleTargetPoint,
-                  icon: const Icon(Icons.my_location_outlined),
-                  label: const Text('Pick Point'),
-                ),
-              ],
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
+            Center(
+              child: Text(
+                pointLabel,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.outline,
+                ),
+              ),
+            ),
+            if (hasPoint) ...[
+              const SizedBox(height: 4),
+              Center(
+                child: Text(
+                  '${_config.intervalMs}ms · ${_config.loopCount == 0 ? 'infinite' : _config.loopCount} loops',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 20),
             SizedBox(
               width: double.infinity,
+              height: 56,
               child: FilledButton(
-                onPressed: _isRunActive ? null : _runSingleTarget,
-                child: Text(_isRunActive ? 'RUNNING' : 'START'),
+                onPressed: _isRunning
+                    ? null
+                    : (_isPaused ? _resumeRunFromNormal : _runSingleTarget),
+                child: Text(
+                  _isRunning
+                      ? 'RUNNING'
+                      : (_isPaused ? 'RESUME' : 'START'),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
             ),
           ],
@@ -652,55 +834,33 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'MULTI TARGET MODE',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            Text(
+              'Multi Target',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
-            const SizedBox(height: 12),
-            if (_scripts.isEmpty)
-              const Text('No scripts yet. Create one in Script List.')
-            else
-              DropdownButtonFormField<String>(
-                initialValue: _config.multiTargetScriptId,
-                decoration: const InputDecoration(labelText: 'Script'),
-                items: _scripts
-                    .map(
-                      (script) => DropdownMenuItem<String>(
-                        value: script.id,
-                        child: Text(script.name),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  if (value == null) {
-                    return;
-                  }
-                  _saveConfig(_config.copyWith(multiTargetScriptId: value));
-                },
-              ),
+            const SizedBox(height: 6),
+            Text(
+              _multiTargetLabel,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.outline),
+            ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
                 OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).pushNamed(AutoClickerApp.scriptListRoute);
-                  },
-                  icon: const Icon(Icons.settings_outlined),
-                  label: const Text('Settings'),
+                  onPressed: _openMultiTargetSelector,
+                  icon: const Icon(Icons.list_alt_outlined),
+                  label: const Text('Select Script'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).pushNamed(AutoClickerApp.helpRoute);
-                  },
-                  icon: const Icon(Icons.info_outline),
-                  label: const Text('Guide'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).pushNamed(AutoClickerApp.scriptListRoute);
-                  },
+                  onPressed: () => Navigator.of(
+                    context,
+                  ).pushNamed(AutoClickerApp.scriptListRoute),
                   icon: const Icon(Icons.tune),
                   label: const Text('Manage Scripts'),
                 ),
@@ -710,8 +870,8 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
             SizedBox(
               width: double.infinity,
               child: FilledButton(
-                onPressed: _scripts.isEmpty || _isRunActive ? null : _runMultiTarget,
-                child: Text(_isRunActive ? 'RUNNING' : 'START'),
+                onPressed: _isRunActive ? null : _runMultiTarget,
+                child: const Text('START MULTI TARGET'),
               ),
             ),
           ],
@@ -720,135 +880,49 @@ class _NormalHomeScreenState extends State<NormalHomeScreen>
     );
   }
 
-  Widget _buildOtherCard() {
+  Widget _buildQuickActionsCard() {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'OTHER',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            Text(
+              'Quick Actions',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
-            const SizedBox(height: 8),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.settings),
-              title: const Text('General Settings'),
-              onTap: () {
-                Navigator.of(context).pushNamed(AutoClickerApp.settingsRoute);
-              },
-            ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.help_outline),
-              title: const Text('Troubleshooting'),
-              onTap: () {
-                Navigator.of(context).pushNamed(AutoClickerApp.helpRoute);
-              },
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: widget.onOpenAdvanced,
-                child: const Text('Open Advanced'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PermissionCard extends StatelessWidget {
-  const _PermissionCard({
-    required this.state,
-    required this.controllerRunning,
-    required this.runState,
-    required this.onOpenPermissions,
-    required this.onToggleController,
-    required this.onStopRun,
-  });
-
-  final PermissionState state;
-  final bool controllerRunning;
-  final String runState;
-  final VoidCallback onOpenPermissions;
-  final VoidCallback onToggleController;
-  final VoidCallback? onStopRun;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'System Status',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                _StatusChip(label: 'Accessibility', enabled: state.accessibilityEnabled),
-                _StatusChip(label: 'Overlay', enabled: state.overlayEnabled),
-                _StatusChip(label: 'Exact Alarm', enabled: state.exactAlarmAllowed),
-                _StatusChip(label: 'Controller', enabled: controllerRunning),
-                _StatusChip(label: 'Run', enabled: runState == 'running'),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text('Run state: $runState'),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton(
-                  onPressed: onOpenPermissions,
-                  child: const Text('Open Permissions'),
-                ),
-                OutlinedButton(
-                  onPressed: onToggleController,
-                  child: Text(
-                    controllerRunning ? 'Stop Controller' : 'Start Controller',
+                OutlinedButton.icon(
+                  onPressed: _toggleController,
+                  icon: Icon(
+                    _controllerRunning ? Icons.stop_circle : Icons.play_circle,
+                  ),
+                  label: Text(
+                    _controllerRunning ? 'Stop Controller' : 'Start Controller',
                   ),
                 ),
-                OutlinedButton(
-                  onPressed: onStopRun,
-                  child: const Text('Stop Now'),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(
+                    context,
+                  ).pushNamed(AutoClickerApp.helpRoute),
+                  icon: const Icon(Icons.help_outline),
+                  label: const Text('Guide'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: widget.onOpenAdvanced,
+                  icon: const Icon(Icons.tune),
+                  label: const Text('Advanced'),
                 ),
               ],
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.label, required this.enabled});
-
-  final String label;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    return Chip(
-      label: Text('$label: ${enabled ? 'ON' : 'OFF'}'),
-      backgroundColor: enabled
-          ? const Color(0xFFE5F4EF)
-          : Theme.of(context).colorScheme.surfaceContainerHighest,
-      side: BorderSide(
-        color: enabled ? const Color(0xFF106B5A) : Colors.transparent,
       ),
     );
   }

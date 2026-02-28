@@ -54,10 +54,7 @@ class _HomeShellScreenState extends State<HomeShellScreen> {
     }
     AnalyticsService.logEvent(
       'home_mode_selected',
-      parameters: <String, Object?>{
-        'mode': mode,
-        'screen_name': 'home_shell',
-      },
+      parameters: <String, Object?>{'mode': mode, 'screen_name': 'home_shell'},
     );
   }
 
@@ -98,22 +95,37 @@ class _HomeShellScreenState extends State<HomeShellScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
-      body: _selectedIndex == 0
-          ? NormalHomeScreen(onOpenAdvanced: () => _setTab(1))
-          : const AdvancedHomeScreen(),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: _setTab,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.flash_on_outlined),
-            selectedIcon: Icon(Icons.flash_on),
-            label: 'Normal',
+      body: Column(
+        children: [
+          SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: SizedBox(
+                width: double.infinity,
+                child: SegmentedButton<int>(
+                  segments: const [
+                    ButtonSegment<int>(
+                      value: 0,
+                      icon: Icon(Icons.flash_on),
+                      label: Text('Normal'),
+                    ),
+                    ButtonSegment<int>(
+                      value: 1,
+                      icon: Icon(Icons.tune),
+                      label: Text('Advanced'),
+                    ),
+                  ],
+                  selected: {_selectedIndex},
+                  onSelectionChanged: (selection) => _setTab(selection.first),
+                ),
+              ),
+            ),
           ),
-          NavigationDestination(
-            icon: Icon(Icons.tune_outlined),
-            selectedIcon: Icon(Icons.tune),
-            label: 'Advanced',
+          Expanded(
+            child: _selectedIndex == 0
+                ? NormalHomeScreen(onOpenAdvanced: () => _setTab(1))
+                : const AdvancedHomeScreen(),
           ),
         ],
       ),

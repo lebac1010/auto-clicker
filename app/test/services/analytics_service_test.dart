@@ -106,6 +106,10 @@ void main() {
 
     test('passes supported stop reasons', () {
       expect(RunTelemetryService.normalizeStopReason('user'), 'user');
+      expect(
+        RunTelemetryService.normalizeStopReason('loop_completed'),
+        'loop_completed',
+      );
       expect(RunTelemetryService.normalizeStopReason('error'), 'error');
       expect(
         RunTelemetryService.normalizeStopReason('permission_lost'),

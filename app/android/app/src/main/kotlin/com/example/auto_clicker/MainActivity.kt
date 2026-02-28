@@ -37,6 +37,7 @@ class MainActivity : FlutterActivity() {
         val recorderManager = RecorderManager.getInstance()
 
         overlayController.setRunCallbacks(
+            owner = "main_activity",
             onStart = {
                 val before = runEngineManager.getState()
                 val success = runEngineManager.startOrResume()

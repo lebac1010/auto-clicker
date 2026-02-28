@@ -142,6 +142,7 @@ object SchedulerManager {
 
     private fun startScheduledRunOnMain(context: Context, payload: Map<String, Any>): Boolean {
         val overlayController = OverlayController.getInstance(context)
+        val overlayWasRunning = overlayController.isRunning()
         val overlayStarted = overlayController.start()
         Log.i(
             tag,
@@ -155,6 +156,13 @@ object SchedulerManager {
             tag,
             "startScheduledRunOnMain scriptId=${payload["id"] ?: "unknown"} runStarted=$started"
         )
+        if (!started && overlayStarted && !overlayWasRunning) {
+            Log.w(
+                tag,
+                "startScheduledRunOnMain rollback overlay scriptId=${payload["id"] ?: "unknown"}"
+            )
+            overlayController.stop()
+        }
         return started
     }
 
@@ -542,7 +550,8 @@ object SchedulerManager {
 
     private fun ensureOverlayCallbacks(context: Context) {
         val runEngine = RunEngineManager.getInstance()
-        OverlayController.getInstance(context).setRunCallbacks(
+        OverlayController.getInstance(context).setRunCallbacksIfAbsent(
+            owner = "scheduler_manager",
             onStart = {
                 val success = runEngine.startOrResume()
                 Log.i(tag, "overlay_action=start_resume_from_scheduler success=$success")

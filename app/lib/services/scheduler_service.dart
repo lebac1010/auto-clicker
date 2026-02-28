@@ -1,3 +1,4 @@
+import 'package:auto_clicker/services/support_log_service.dart';
 import 'package:flutter/services.dart';
 
 abstract class SchedulerGateway {
@@ -44,24 +45,42 @@ class SchedulerService {
   Future<void> start() async {
     try {
       await _gateway.start();
-    } catch (_) {
+    } catch (error, stackTrace) {
       // Keep app usable even if scheduler backend is unavailable.
+      SupportLogService.logError(
+        'scheduler_service',
+        'Failed to start scheduler backend.',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 
   Future<void> reschedule() async {
     try {
       await _gateway.reschedule();
-    } catch (_) {
+    } catch (error, stackTrace) {
       // Keep app usable even if scheduler backend is unavailable.
+      SupportLogService.logError(
+        'scheduler_service',
+        'Failed to reschedule scheduler backend.',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 
   Future<void> stop() async {
     try {
       await _gateway.stop();
-    } catch (_) {
+    } catch (error, stackTrace) {
       // Keep app usable even if scheduler backend is unavailable.
+      SupportLogService.logError(
+        'scheduler_service',
+        'Failed to stop scheduler backend.',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 }

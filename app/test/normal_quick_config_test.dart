@@ -19,8 +19,16 @@ void main() {
       });
 
       expect(parsed.intervalMs, 1);
-      expect(parsed.loopCount, 1);
+      expect(parsed.loopCount, 0);
       expect(parsed.startDelaySec, 0);
+    });
+
+    test('fromJson normalizes negative loop count to 0', () {
+      final parsed = NormalQuickConfig.fromJson(<String, dynamic>{
+        'loopCount': -5,
+      });
+
+      expect(parsed.loopCount, 0);
     });
 
     test('copyWith updates single target point', () {
