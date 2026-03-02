@@ -121,3 +121,8 @@ Uu tien theo thu tu:
 3. `docs/PROJECT_STATUS.md`.
 4. Cac doc spec cu (`TECH_SPEC.md`, ...).
 
+## 10) Code map tham chieu nhanh
+
+Neu can map feature -> file de sua nhanh, doc them:
+
+1. `docs/CODE_MAP.md`

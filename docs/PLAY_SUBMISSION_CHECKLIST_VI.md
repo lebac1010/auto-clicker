@@ -2,6 +2,9 @@
 
 Cap nhat: 2026-02-23
 
+Tai lieu tong hop declaration + Data Safety draft:
+- `docs/PLAY_PRE_SUBMIT_PACK_VI.md`
+
 ## 1) Khai bao bat buoc tren Play Console
 
 1. App content -> Accessibility API declaration
@@ -54,4 +57,3 @@ Cap nhat: 2026-02-23
 
 3. Contact:
    - Email support hoat dong.
-

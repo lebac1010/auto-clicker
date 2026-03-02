@@ -2,6 +2,11 @@
 
 Last updated: 2026-02-23
 
+## 0) Pre-submit pack
+
+1. Tai lieu thao tac submit + mau khai bao:
+   - `docs/PLAY_PRE_SUBMIT_PACK_VI.md`
+
 ## 1) Accessibility (high priority)
 
 1. In-app disclosure must be shown before opening Accessibility settings.
